@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountType {
+  ORG
+  USER
+}
+
+enum InstallationStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ReviewStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum CommentCategory {
+  SECURITY
+  BUGS
+  PERFORMANCE
+  STYLE
+  BEST_PRACTICES
+}
+
+enum CommentSeverity {
+  CRITICAL
+  WARNING
+  SUGGESTION
+  NITPICK
+}
+
+model Installation {
+  id                   String             @id @default(uuid())
+  githubInstallationId Int                @unique
+  githubAccountLogin   String
+  githubAccountType    AccountType
+  status               InstallationStatus @default(ACTIVE)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  repositories         Repository[]
+
+  @@map("installations")
+}
+
+model Repository {
+  id             String       @id @default(uuid())
+  installationId String
+  installation   Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  githubRepoId   Int
+  fullName       String
+  isEnabled      Boolean      @default(true)
+  settings       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  reviews        Review[]
+
+  @@unique([installationId, githubRepoId])
+  @@map("repositories")
+}
+
+model Review {
+  id                String         @id @default(uuid())
+  repositoryId      String
+  repository        Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  pullRequestNumber Int
+  commitSha         String
+  status            ReviewStatus   @default(PENDING)
+  summary           String?
+  issuesFound       Int            @default(0)
+  processingTimeMs  Int?
+  createdAt         DateTime       @default(now())
+  completedAt       DateTime?
+  comments          ReviewComment[]
+
+  @@unique([repositoryId, commitSha])
+  @@map("reviews")
+}
+
+model ReviewComment {
+  id              String          @id @default(uuid())
+  reviewId        String
+  review          Review          @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  filePath        String
+  lineNumber      Int
+  category        CommentCategory
+  severity        CommentSeverity
+  message         String
+  suggestion      String?
+  confidence      Float
+  githubCommentId String?
+  createdAt       DateTime        @default(now())
+
+  @@map("review_comments")
+}
+
+model Job {
+  id          String    @id @default(uuid())
+  type        String
+  payload     Json
+  status      JobStatus @default(QUEUED)
+  attempts    Int       @default(0)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@map("jobs")
+}
