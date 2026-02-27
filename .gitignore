@@ -48,6 +48,9 @@ prisma/generated/
 playwright-report/
 test-results/
 
+# plans (internal docs only)
+/plans/
+
 # ide
 .idea/
 *.swp
