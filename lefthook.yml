@@ -1,0 +1,7 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      run: pnpm biome check .
+    type-check:
+      run: pnpm type-check

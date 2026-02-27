@@ -57,3 +57,7 @@ test-results/
 *.swo
 
 /src/generated/prisma
+
+# claude code
+.claude/
+!.claude/commands/

@@ -10,6 +10,12 @@ export default defineConfig({
       provider: "v8",
       include: ["src/lib/**/*.ts"],
       exclude: ["src/lib/db/prisma-client.ts"],
+      thresholds: {
+        lines: 80,
+        branches: 80,
+        functions: 80,
+        statements: 80,
+      },
     },
   },
   resolve: {

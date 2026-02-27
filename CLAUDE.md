@@ -2,9 +2,13 @@
 
 ## Project Overview
 
-A GitHub App that analyzes pull requests using AST parsing and LLM-powered analysis to post contextual, actionable review comments. Built with Next.js 15, TypeScript, and Claude API.
+A GitHub App that analyzes pull requests using AST parsing and LLM-powered analysis to post contextual, actionable review comments. Built with Next.js 15, TypeScript, and `@anthropic-ai/sdk`.
 
 **Docs:** Read `plans/prd.md` for full requirements. Read `plans/implementation_plan.md` for phased build plan. See `plans/checklist.md` for implementation progress tracking and `plans/phases/` for individual phase details.
+
+## Status
+
+**Phase 2: Core Review Engine** — In Progress. Phase 1 (scaffolding, webhook handler, database schema) is complete. Diff parser and AST parser are implemented; context builder, LLM integration, and comment mapper are next.
 
 ## Tech Stack
 
@@ -15,7 +19,7 @@ A GitHub App that analyzes pull requests using AST parsing and LLM-powered analy
 | Language | TypeScript (strict mode, zero `any`) |
 | GitHub integration | Octokit + Probot |
 | AST parsing | tree-sitter (web-tree-sitter WASM) |
-| LLM | Anthropic Claude API (`@anthropic-ai/sdk`) |
+| LLM | `@anthropic-ai/sdk` |
 | Queue | BullMQ + Valkey |
 | Database | PostgreSQL + Prisma ORM |
 | Linting/Formatting | Biome |
@@ -156,6 +160,12 @@ Write implementation first, then write tests in a **separate dedicated session**
 - Run `pnpm biome check` before every commit
 - Run `pnpm type-check` before every commit
 - Never commit `.env*` files (only `.env.example`), `node_modules/`, or generated Prisma client — see "Security & Environment Variables" section
+- **No AI/LLM provider names anywhere in the project** — this applies to ALL code, comments, commit messages, PR descriptions, README, documentation, variable names, log messages, user-facing strings, and system prompts. Specifically:
+  - Never use: "Claude", "Claude Code", "Anthropic", "AI-generated", "Co-Authored-By: Claude", or any AI tool name
+  - In LLM prompts (`src/lib/llm/prompts.ts`): use generic terms like "You are an expert code reviewer" — never "You are Claude"
+  - In code: use generic names like `llmClient`, `LLMService`, `model` — never `claudeClient`, `claudeModel`
+  - Model ID strings in SDK calls (e.g., `"claude-sonnet-4-20250514"`) are the only exception — they're required by the API
+  - The `plans/` directory is exempt (internal planning docs only)
 
 ## Commands
 
@@ -172,6 +182,7 @@ pnpm db:migrate       # Run Prisma migrations
 pnpm db:generate      # Generate Prisma client
 pnpm db:studio        # Open Prisma Studio
 pnpm worker           # Start BullMQ worker process
+pnpm validate         # Run all checks (lint + type-check + test with coverage)
 ```
 
 ## Session Workflow
@@ -193,3 +204,10 @@ When starting a new session:
 5. **Don't import something you don't use in the same file** — if a refactor removes usage, remove the import in the same commit
 6. **Don't leave `console.log` in production code** — use structured logging or remove it
 7. **Don't write types that are never referenced** — if you define `type Foo`, something must use `Foo`
+
+## References
+
+- `plans/prd.md` — Full product requirements
+- `plans/implementation_plan.md` — Architecture and phased build plan
+- `plans/checklist.md` — Implementation progress tracker
+- `plans/phases/` — Individual phase detail files
