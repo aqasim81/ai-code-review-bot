@@ -74,7 +74,7 @@
 - [x] **Test the implementation** — End-to-end test: webhook → review comments appear on PR
 - [x] **Fix if required** — Address any issues found during review/testing
 - [x] **Update checklist** — Mark completed items above
-- [ ] **Ask to implement next phase**
+- [x] **Ask to implement next phase**
 
 ---
 
