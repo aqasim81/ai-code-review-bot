@@ -1,6 +1,7 @@
-import type { CommentMappingError } from "@/types/errors";
-import type { Result } from "@/types/results";
-import { ok } from "@/types/results";
+import type {
+  CommentCategory,
+  CommentSeverity,
+} from "@/generated/prisma/enums";
 import type {
   CommentMappingResult,
   DiffHunk,
@@ -12,14 +13,14 @@ import type {
   UnmappedFinding,
 } from "@/types/review";
 
-const SEVERITY_BADGES: Record<string, string> = {
+const SEVERITY_BADGES: Record<CommentSeverity, string> = {
   CRITICAL: "🔴 **Critical**",
   WARNING: "🟡 **Warning**",
   SUGGESTION: "🔵 **Suggestion**",
   NITPICK: "⚪ **Nitpick**",
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
+const CATEGORY_LABELS: Record<CommentCategory, string> = {
   SECURITY: "Security",
   BUGS: "Bug Risk",
   PERFORMANCE: "Performance",
@@ -130,9 +131,9 @@ function isMappedComment(
 export function mapFindingsToGitHubComments(
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
-): Result<CommentMappingResult, CommentMappingError> {
+): CommentMappingResult {
   if (findings.length === 0) {
-    return ok({ mappedComments: [], unmappedFindings: [] });
+    return { mappedComments: [], unmappedFindings: [] };
   }
 
   const results = findings.map((finding) =>
@@ -144,7 +145,7 @@ export function mapFindingsToGitHubComments(
     (r): r is UnmappedFinding => !isMappedComment(r),
   );
 
-  return ok({ mappedComments, unmappedFindings });
+  return { mappedComments, unmappedFindings };
 }
 
 export function buildReviewSummary(

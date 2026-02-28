@@ -14,8 +14,6 @@ export type GitHubError =
   | "GITHUB_FORBIDDEN"
   | "GITHUB_UNKNOWN_ERROR";
 
-export type CommentMappingError = "COMMENT_MAPPING_NO_FINDINGS";
-
 export type ReviewEngineError =
   | "REVIEW_ALREADY_EXISTS"
   | "REVIEW_DIFF_FETCH_FAILED"

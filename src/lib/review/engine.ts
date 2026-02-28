@@ -301,10 +301,10 @@ async function postAndSaveReviewResults(
   parsedDiff: ParsedDiff,
   llmSummary: string,
 ): Promise<void> {
-  const mappingResult = mapFindingsToGitHubComments(findings, parsedDiff);
-  const { mappedComments, unmappedFindings } = mappingResult.success
-    ? mappingResult.data
-    : { mappedComments: [] as const, unmappedFindings: [] as const };
+  const { mappedComments, unmappedFindings } = mapFindingsToGitHubComments(
+    findings,
+    parsedDiff,
+  );
 
   const reviewSummary = buildReviewSummary(
     llmSummary,
@@ -323,7 +323,7 @@ async function postAndSaveReviewResults(
     {
       commitSha: request.commitSha,
       body: reviewSummary,
-      event: reviewEvent as "COMMENT" | "REQUEST_CHANGES",
+      event: reviewEvent,
       comments: mappedComments.map((c) => ({
         path: c.path,
         line: c.line,
