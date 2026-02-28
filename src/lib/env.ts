@@ -11,13 +11,15 @@ const envSchema = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
 
+  // Required — consumed by GitHub API client (Phase 3) and LLM client (Phase 2)
+  GITHUB_APP_ID: z.string().min(1),
+  GITHUB_PRIVATE_KEY: z.string().min(1),
+  ANTHROPIC_API_KEY: z.string().min(1),
+
   // Optional — features not yet implemented.
   // Remove .optional() when the consuming feature is built.
-  GITHUB_APP_ID: z.string().min(1).optional(),
-  GITHUB_PRIVATE_KEY: z.string().min(1).optional(),
   GITHUB_CLIENT_ID: z.string().min(1).optional(),
   GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
   VALKEY_URL: z.string().min(1).optional(),
   NEXTAUTH_SECRET: z.string().min(1).optional(),
   NEXTAUTH_URL: z.string().url().optional(),
