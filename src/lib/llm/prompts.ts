@@ -46,6 +46,24 @@ Each finding must have these exact fields:
     "message": "User input is passed directly to SQL query without parameterization, enabling SQL injection.",
     "suggestion": "Use parameterized queries: db.query('SELECT * FROM users WHERE id = $1', [userId])",
     "confidence": 0.95
+  },
+  {
+    "filePath": "src/lib/user-service.ts",
+    "lineNumber": 18,
+    "category": "BUGS",
+    "severity": "WARNING",
+    "message": "Array index access without bounds check. items[index] will return undefined if index is out of range, causing a runtime error on the next line.",
+    "suggestion": "Add a bounds check: if (index < 0 || index >= items.length) return null;",
+    "confidence": 0.88
+  },
+  {
+    "filePath": "src/components/Dashboard.tsx",
+    "lineNumber": 55,
+    "category": "STYLE",
+    "severity": "SUGGESTION",
+    "message": "Variable name 'd' is not descriptive. Single-letter names make code harder to understand.",
+    "suggestion": "Rename to 'dashboardData' or 'fetchResult' to convey meaning.",
+    "confidence": 0.82
   }
 ]
 

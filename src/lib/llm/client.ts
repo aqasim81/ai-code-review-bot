@@ -103,47 +103,66 @@ async function callWithRetry(
       await sleep(delayMs);
     }
 
-    try {
-      const response = await client.messages.create({
-        model: modelId,
-        max_tokens: maxOutputTokens,
-        system,
-        messages: [{ role: "user", content: userMessage }],
-      });
+    const result = await executeSingleLlmCall(
+      client,
+      modelId,
+      maxOutputTokens,
+      system,
+      userMessage,
+    );
 
-      const textBlock = response.content.find((block) => block.type === "text");
-      if (textBlock === undefined || textBlock.type !== "text") {
-        lastError = "LLM_INVALID_RESPONSE";
-        continue;
-      }
-
-      logger.info("LLM call completed", {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        model: modelId,
-      });
-
-      return ok({
-        responseText: textBlock.text,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-      });
-    } catch (error: unknown) {
-      const mappedError = mapSdkError(error);
-      lastError = mappedError;
-
-      if (!isRetryableError(mappedError)) {
-        return err(mappedError);
-      }
-
-      logger.warn("LLM call failed, will retry", {
-        attempt,
-        error: mappedError,
-      });
+    if (result.success) {
+      return result;
     }
+
+    lastError = result.error;
+    if (!isRetryableError(lastError)) {
+      return result;
+    }
+
+    logger.warn("LLM call failed, will retry", {
+      attempt,
+      error: lastError,
+    });
   }
 
   return err(lastError);
+}
+
+async function executeSingleLlmCall(
+  client: LlmSdk,
+  modelId: string,
+  maxOutputTokens: number,
+  system: string,
+  userMessage: string,
+): Promise<Result<LlmRawResponse, LLMError>> {
+  try {
+    const response = await client.messages.create({
+      model: modelId,
+      max_tokens: maxOutputTokens,
+      system,
+      messages: [{ role: "user", content: userMessage }],
+    });
+
+    const textBlock = response.content.find((block) => block.type === "text");
+    if (textBlock === undefined || textBlock.type !== "text") {
+      return err("LLM_INVALID_RESPONSE");
+    }
+
+    logger.info("LLM call completed", {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      model: modelId,
+    });
+
+    return ok({
+      responseText: textBlock.text,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    });
+  } catch (error: unknown) {
+    return err(mapSdkError(error));
+  }
 }
 
 function mapSdkError(error: unknown): LLMError {

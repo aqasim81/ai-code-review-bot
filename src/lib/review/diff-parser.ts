@@ -233,13 +233,28 @@ function buildDiffHunk(
   const newStart = Number.parseInt(match[3] ?? "1", 10);
   const newCount = Number.parseInt(match[4] ?? "1", 10);
 
+  return {
+    oldStart,
+    oldCount,
+    newStart,
+    newCount,
+    header,
+    lines: parseDiffLines(rawLines, oldStart, newStart),
+  };
+}
+
+function parseDiffLines(
+  rawLines: string[],
+  oldStart: number,
+  newStart: number,
+): DiffLine[] {
   let oldLine = oldStart;
   let newLine = newStart;
-  const parsedLines: DiffLine[] = [];
+  const parsed: DiffLine[] = [];
 
   for (const raw of rawLines) {
     if (raw.startsWith("+")) {
-      parsedLines.push({
+      parsed.push({
         type: "added",
         content: raw.slice(1),
         newLineNumber: newLine,
@@ -247,7 +262,7 @@ function buildDiffHunk(
       });
       newLine++;
     } else if (raw.startsWith("-")) {
-      parsedLines.push({
+      parsed.push({
         type: "removed",
         content: raw.slice(1),
         newLineNumber: null,
@@ -255,7 +270,7 @@ function buildDiffHunk(
       });
       oldLine++;
     } else if (raw.startsWith(" ")) {
-      parsedLines.push({
+      parsed.push({
         type: "context",
         content: raw.slice(1),
         newLineNumber: newLine,
@@ -269,12 +284,5 @@ function buildDiffHunk(
     // Ignore other lines (empty trailing lines, etc.)
   }
 
-  return {
-    oldStart,
-    oldCount,
-    newStart,
-    newCount,
-    header,
-    lines: parsedLines,
-  };
+  return parsed;
 }

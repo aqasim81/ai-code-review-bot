@@ -124,6 +124,10 @@ export async function parseFileAst(
     }
   }
 
+  if (parserInstance === null) {
+    return err("AST_INIT_FAILED");
+  }
+
   const languageObj = await loadLanguageGrammar(language);
   if (languageObj === null) {
     return err("AST_LANGUAGE_NOT_SUPPORTED");
@@ -131,10 +135,8 @@ export async function parseFileAst(
 
   let tree: ReturnType<Parser["parse"]> = null;
   try {
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null after init check above
-    parserInstance!.setLanguage(languageObj);
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null after init check above
-    tree = parserInstance!.parse(fileContent);
+    parserInstance.setLanguage(languageObj);
+    tree = parserInstance.parse(fileContent);
 
     if (tree === null) {
       return err("AST_PARSE_FAILED");
