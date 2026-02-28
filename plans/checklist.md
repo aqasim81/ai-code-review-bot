@@ -51,7 +51,7 @@
 - [x] **Test the implementation** — Verify diff parsing, AST extraction, LLM integration with sample data
 - [x] **Fix if required** — Address any issues found during review/testing
 - [x] **Update checklist** — Mark completed items above
-- [ ] **Ask to implement next phase**
+- [x] **Ask to implement next phase**
 
 ---
 
@@ -61,19 +61,19 @@
 
 ### Workflow
 
-- [ ] **Planning** — Read the phase file, understand requirements, identify dependencies
-- [ ] **Review the plan** — Verify approach before coding, clarify any unknowns
-- [ ] **Implement the plan**
-  - [ ] Build comment mapper — map LLM findings to GitHub diff positions
-  - [ ] Build review poster — post inline comments and summary via GitHub API
-  - [ ] Build review orchestrator — wire full pipeline (fetch → parse → AST → LLM → post)
-  - [ ] Implement error handling with graceful degradation at each pipeline step
-  - [ ] Implement idempotency — skip if review exists for commit SHA
-  - [ ] Save review records and comments to database
-- [ ] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
-- [ ] **Test the implementation** — End-to-end test: webhook → review comments appear on PR
-- [ ] **Fix if required** — Address any issues found during review/testing
-- [ ] **Update checklist** — Mark completed items above
+- [x] **Planning** — Read the phase file, understand requirements, identify dependencies
+- [x] **Review the plan** — Verify approach before coding, clarify any unknowns
+- [x] **Implement the plan**
+  - [x] Build comment mapper — map LLM findings to GitHub diff positions
+  - [x] Build review poster — post inline comments and summary via GitHub API
+  - [x] Build review orchestrator — wire full pipeline (fetch → parse → AST → LLM → post)
+  - [x] Implement error handling with graceful degradation at each pipeline step
+  - [x] Implement idempotency — skip if review exists for commit SHA
+  - [x] Save review records and comments to database
+- [x] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
+- [x] **Test the implementation** — End-to-end test: webhook → review comments appear on PR
+- [x] **Fix if required** — Address any issues found during review/testing
+- [x] **Update checklist** — Mark completed items above
 - [ ] **Ask to implement next phase**
 
 ---

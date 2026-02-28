@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 2: Core Review Engine** — Complete. Diff parser, AST parser, context builder, LLM prompts, response parser, and LLM client implemented. Next: Phase 3 (GitHub Review Posting).
+**Phase 3: GitHub Review Posting** — Complete. Comment mapper, GitHub API client (App auth, token refresh), review orchestrator with full pipeline, DB queries for review CRUD. Next: Phase 4 (Background Processing).
 
 ## Tech Stack
 
