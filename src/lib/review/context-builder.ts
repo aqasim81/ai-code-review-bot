@@ -153,10 +153,6 @@ function estimateFileTokenCount(context: FileReviewContext): number {
     charCount += imp.source.length + 20;
   }
 
-  if (context.fullFileContent !== null) {
-    charCount += context.fullFileContent.length;
-  }
-
   return Math.ceil(charCount / 4);
 }
 

@@ -1,4 +1,4 @@
-export type DiffParseError = "DIFF_EMPTY" | "DIFF_MALFORMED";
+export type DiffParseError = "DIFF_EMPTY";
 
 export type AstParseError =
   | "AST_INIT_FAILED"
