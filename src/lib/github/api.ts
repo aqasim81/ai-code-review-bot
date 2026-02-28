@@ -61,13 +61,24 @@ async function createInstallationAccessToken(
 
 function classifyGitHubError(error: unknown): GitHubError {
   if (error instanceof Error && "status" in error) {
-    const status = (error as { status: number }).status;
-    if (status === 401 || status === 400) return "GITHUB_AUTH_FAILED";
-    if (status === 403) return "GITHUB_FORBIDDEN";
-    if (status === 404) return "GITHUB_NOT_FOUND";
-    if (status === 429) return "GITHUB_RATE_LIMITED";
+    const statusValue = (error as Record<string, unknown>).status;
+    if (typeof statusValue === "number") {
+      if (statusValue === 401 || statusValue === 400)
+        return "GITHUB_AUTH_FAILED";
+      if (statusValue === 403) return "GITHUB_FORBIDDEN";
+      if (statusValue === 404) return "GITHUB_NOT_FOUND";
+      if (statusValue === 429) return "GITHUB_RATE_LIMITED";
+    }
   }
   return "GITHUB_UNKNOWN_ERROR";
+}
+
+function isAuthError(error: unknown): boolean {
+  if (error instanceof Error && "status" in error) {
+    const statusValue = (error as Record<string, unknown>).status;
+    return statusValue === 401;
+  }
+  return false;
 }
 
 const RATE_LIMIT_THRESHOLD = 10;
@@ -90,20 +101,39 @@ async function checkRateLimit(octokit: Octokit): Promise<void> {
   }
 }
 
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // Refresh 5 minutes before expiry
+const GITHUB_TOKEN_LIFETIME_MS = 60 * 60 * 1000; // Tokens last 1 hour
+
 export function createGitHubService(
   credentials: GitHubAppCredentials,
   installationId: number,
 ): GitHubService {
   let cachedToken: string | null = null;
+  let tokenCreatedAt = 0;
+
+  function isTokenExpired(): boolean {
+    if (!cachedToken) return true;
+    return (
+      Date.now() - tokenCreatedAt >
+      GITHUB_TOKEN_LIFETIME_MS - TOKEN_EXPIRY_BUFFER_MS
+    );
+  }
+
+  function clearToken(): void {
+    cachedToken = null;
+    tokenCreatedAt = 0;
+  }
 
   async function getOctokit(): Promise<Result<Octokit, GitHubError>> {
-    if (!cachedToken) {
+    if (isTokenExpired()) {
+      clearToken();
       const tokenResult = await createInstallationAccessToken(
         credentials,
         installationId,
       );
       if (!tokenResult.success) return tokenResult;
       cachedToken = tokenResult.data;
+      tokenCreatedAt = Date.now();
     }
     return ok(new Octokit({ auth: cachedToken }));
   }
@@ -128,8 +158,16 @@ export function createGitHubService(
           mediaType: { format: "diff" },
         });
 
-        return ok(response.data as unknown as string);
+        // Octokit types don't account for diff mediaType returning a string
+        const diff = response.data as unknown;
+        if (typeof diff !== "string") {
+          return err("GITHUB_UNKNOWN_ERROR");
+        }
+        return ok(diff);
       } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
         logger.error("Failed to fetch PR diff", {
           owner,
           repo,
@@ -166,6 +204,9 @@ export function createGitHubService(
         const content = Buffer.from(data.content, "base64").toString("utf-8");
         return ok(content);
       } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
         logger.error("Failed to fetch file content", {
           owner,
           repo,
@@ -220,6 +261,9 @@ export function createGitHubService(
           postedCommentCount: comments.length,
         });
       } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
         logger.error("Failed to post review", {
           owner,
           repo,

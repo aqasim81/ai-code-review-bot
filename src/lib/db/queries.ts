@@ -4,7 +4,7 @@ import type {
   CommentSeverity,
   ReviewStatus,
 } from "@/generated/prisma/enums";
-import type { InstallationId, ReviewId } from "@/types/branded";
+import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import { prisma } from "./prisma-client";
@@ -83,13 +83,19 @@ export async function createRepositories(
 
 export async function findRepositoryByFullName(
   fullName: string,
-): Promise<Result<{ id: string; installationId: string } | null, string>> {
+): Promise<
+  Result<{ id: RepositoryId; installationId: InstallationId } | null, string>
+> {
   try {
     const repo = await prisma.repository.findFirst({
       where: { fullName, isEnabled: true },
       select: { id: true, installationId: true },
     });
-    return ok(repo);
+    if (!repo) return ok(null);
+    return ok({
+      id: repo.id as RepositoryId,
+      installationId: repo.installationId as InstallationId,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -98,7 +104,7 @@ export async function findRepositoryByFullName(
 }
 
 export async function findExistingReviewByCommitSha(
-  repositoryId: string,
+  repositoryId: RepositoryId,
   commitSha: string,
 ): Promise<Result<{ id: ReviewId } | null, string>> {
   try {
@@ -115,7 +121,7 @@ export async function findExistingReviewByCommitSha(
 }
 
 interface CreateReviewInput {
-  repositoryId: string;
+  repositoryId: RepositoryId;
   pullRequestNumber: number;
   commitSha: string;
 }

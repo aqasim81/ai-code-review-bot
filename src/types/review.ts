@@ -2,6 +2,7 @@ import type {
   CommentCategory,
   CommentSeverity,
 } from "@/generated/prisma/enums";
+import type { ReviewId } from "@/types/branded";
 
 // --- Supported languages ---
 
@@ -148,7 +149,7 @@ export interface ReviewRequest {
 }
 
 export interface ReviewEngineResult {
-  readonly reviewId: string;
+  readonly reviewId: ReviewId;
   readonly issuesFound: number;
   readonly processingTimeMs: number;
   readonly summary: string;
