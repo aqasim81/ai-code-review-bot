@@ -6,3 +6,20 @@ export type AstParseError =
   | "AST_PARSE_FAILED";
 
 export type ContextBuildError = "CONTEXT_NO_REVIEWABLE_FILES";
+
+export type GitHubError =
+  | "GITHUB_AUTH_FAILED"
+  | "GITHUB_RATE_LIMITED"
+  | "GITHUB_NOT_FOUND"
+  | "GITHUB_FORBIDDEN"
+  | "GITHUB_UNKNOWN_ERROR";
+
+export type CommentMappingError = "COMMENT_MAPPING_NO_FINDINGS";
+
+export type ReviewEngineError =
+  | "REVIEW_ALREADY_EXISTS"
+  | "REVIEW_DIFF_FETCH_FAILED"
+  | "REVIEW_DIFF_PARSE_FAILED"
+  | "REVIEW_LLM_FAILED"
+  | "REVIEW_POST_FAILED"
+  | "REVIEW_DB_ERROR";

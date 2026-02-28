@@ -117,3 +117,39 @@ export interface ReviewResult {
     readonly outputTokens: number;
   };
 }
+
+// --- Comment Mapper output types ---
+
+export interface MappedReviewComment {
+  readonly finding: ReviewFinding;
+  readonly path: string;
+  readonly line: number;
+  readonly side: "LEFT" | "RIGHT";
+  readonly formattedBody: string;
+}
+
+export interface UnmappedFinding {
+  readonly finding: ReviewFinding;
+  readonly reason: string;
+}
+
+export interface CommentMappingResult {
+  readonly mappedComments: readonly MappedReviewComment[];
+  readonly unmappedFindings: readonly UnmappedFinding[];
+}
+
+// --- Review Engine types ---
+
+export interface ReviewRequest {
+  readonly installationId: number;
+  readonly repositoryFullName: string;
+  readonly pullRequestNumber: number;
+  readonly commitSha: string;
+}
+
+export interface ReviewEngineResult {
+  readonly reviewId: string;
+  readonly issuesFound: number;
+  readonly processingTimeMs: number;
+  readonly summary: string;
+}
