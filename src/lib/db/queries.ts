@@ -291,7 +291,7 @@ export async function createJobRecord(
     const job = await prisma.job.create({
       data: {
         type: input.type,
-        payload: JSON.parse(JSON.stringify(input.payload)),
+        payload: input.payload,
         status: "QUEUED",
       },
     });

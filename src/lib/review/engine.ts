@@ -8,6 +8,7 @@ import {
   updateReviewStatus,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
+import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import {
   buildReviewSummary,
@@ -44,15 +45,15 @@ function isSupportedLanguage(language: string): language is SupportedLanguage {
   return SUPPORTED_LANGUAGES.has(language);
 }
 
-function parseRepositoryFullName(
+function parseRepositoryFullNameAsResult(
   fullName: string,
 ): Result<{ owner: string; repo: string }, "REVIEW_DB_ERROR"> {
-  const parts = fullName.split("/");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+  const parsed = parseRepositoryFullName(fullName);
+  if (parsed === null) {
     logger.error("Invalid repository full name", { fullName });
     return err("REVIEW_DB_ERROR");
   }
-  return ok({ owner: parts[0], repo: parts[1] });
+  return ok(parsed);
 }
 
 async function lookupRepositoryAndCheckIdempotency(
@@ -389,7 +390,9 @@ export async function executeReview(
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
   const startTime = Date.now();
 
-  const nameResult = parseRepositoryFullName(request.repositoryFullName);
+  const nameResult = parseRepositoryFullNameAsResult(
+    request.repositoryFullName,
+  );
   if (!nameResult.success) return nameResult;
   const { owner, repo } = nameResult.data;
 

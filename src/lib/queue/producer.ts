@@ -19,6 +19,7 @@ function getReviewQueue(): Queue {
       connection: createValkeyConnectionOptions(),
       defaultJobOptions: {
         attempts: 3,
+        // Custom backoff: 10s → 30s → 90s. Strategy defined in worker/index.ts via calculateBackoffDelay.
         backoff: { type: "custom" },
         removeOnComplete: { count: 100 },
         removeOnFail: { count: 500 },

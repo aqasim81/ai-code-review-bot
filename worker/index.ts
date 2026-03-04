@@ -1,5 +1,4 @@
 import { Queue, Worker } from "bullmq";
-import { updateJobRecord } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import { calculateBackoffDelay, processReviewJob } from "@/lib/queue/processor";
@@ -86,27 +85,32 @@ function createReviewWorker(): {
       return;
     }
 
-    logger.error("Job failed", {
-      jobId: job.id,
-      name: job.name,
-      repository: job.data.payload.repositoryFullName,
-      pullRequest: job.data.payload.pullRequestNumber,
-      error: error.message,
-      attemptsMade: job.attemptsMade,
-    });
-
     const maxAttempts = job.opts.attempts ?? 3;
-    if (job.attemptsMade >= maxAttempts) {
+    const isFinalAttempt = job.attemptsMade >= maxAttempts;
+
+    if (isFinalAttempt) {
+      logger.error("Job permanently failed after exhausting retries", {
+        jobId: job.id,
+        name: job.name,
+        repository: job.data.payload.repositoryFullName,
+        pullRequest: job.data.payload.pullRequestNumber,
+        error: error.message,
+        attemptsMade: job.attemptsMade,
+      });
+
       await moveToDeadLetterQueue(
         deadLetterQueue,
         job.id,
         job.data,
         error.message,
       );
-
-      await updateJobRecord(job.id ?? "unknown", "FAILED", {
-        lastError: error.message,
-        attempts: job.attemptsMade,
+    } else {
+      logger.warn("Job attempt failed, will retry", {
+        jobId: job.id,
+        repository: job.data.payload.repositoryFullName,
+        error: error.message,
+        attemptsMade: job.attemptsMade,
+        maxAttempts,
       });
     }
   });
