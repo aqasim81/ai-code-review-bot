@@ -3,6 +3,7 @@ import { Octokit } from "@octokit/rest";
 import { logger } from "@/lib/logger";
 import type { GitHubError } from "@/types/errors";
 import type {
+  CommitComparisonResult,
   GitHubService,
   PostedReviewResult,
   PullRequestReviewPayload,
@@ -268,6 +269,47 @@ export function createGitHubService(
           owner,
           repo,
           pullNumber,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return err(classifyGitHubError(error));
+      }
+    },
+
+    async compareCommits(
+      owner: string,
+      repo: string,
+      baseSha: string,
+      headSha: string,
+    ): Promise<Result<CommitComparisonResult, GitHubError>> {
+      const octokitResult = await getOctokit();
+      if (!octokitResult.success) return octokitResult;
+      const octokit = octokitResult.data;
+
+      try {
+        await checkRateLimit(octokit);
+
+        const response = await octokit.repos.compareCommits({
+          owner,
+          repo,
+          base: baseSha,
+          head: headSha,
+        });
+
+        const files = (response.data.files ?? []).map((file) => ({
+          filename: file.filename,
+          status: file.status ?? "modified",
+        }));
+
+        return ok({ files });
+      } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
+        logger.error("Failed to compare commits", {
+          owner,
+          repo,
+          baseSha,
+          headSha,
           error: error instanceof Error ? error.message : String(error),
         });
         return err(classifyGitHubError(error));

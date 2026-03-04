@@ -20,6 +20,15 @@ export interface PostedReviewResult {
   readonly postedCommentCount: number;
 }
 
+export interface CommitComparisonFile {
+  readonly filename: string;
+  readonly status: string;
+}
+
+export interface CommitComparisonResult {
+  readonly files: readonly CommitComparisonFile[];
+}
+
 export interface GitHubService {
   fetchPullRequestDiff(
     owner: string,
@@ -40,4 +49,11 @@ export interface GitHubService {
     pullNumber: number,
     review: PullRequestReviewPayload,
   ): Promise<Result<PostedReviewResult, GitHubError>>;
+
+  compareCommits(
+    owner: string,
+    repo: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<Result<CommitComparisonResult, GitHubError>>;
 }

@@ -146,6 +146,7 @@ export interface ReviewRequest {
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;
+  readonly filePathFilter?: readonly string[];
 }
 
 export interface ReviewEngineResult {

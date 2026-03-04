@@ -2,6 +2,7 @@ import type { AccountType } from "@/generated/prisma/client";
 import type {
   CommentCategory,
   CommentSeverity,
+  JobStatus,
   ReviewStatus,
 } from "@/generated/prisma/enums";
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
@@ -251,5 +252,79 @@ export async function failReview(
     const message =
       error instanceof Error ? error.message : "Unknown database error";
     return err(`Failed to mark review as failed: ${message}`);
+  }
+}
+
+// --- Job queries (Phase 4: Background Processing) ---
+
+export async function findLastReviewedCommitForPullRequest(
+  repositoryFullName: string,
+  pullRequestNumber: number,
+): Promise<Result<{ commitSha: string } | null, string>> {
+  try {
+    const review = await prisma.review.findFirst({
+      where: {
+        pullRequestNumber,
+        status: "COMPLETED",
+        repository: { fullName: repositoryFullName },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { commitSha: true },
+    });
+    return ok(review ? { commitSha: review.commitSha } : null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to find last reviewed commit: ${message}`);
+  }
+}
+
+interface CreateJobRecordInput {
+  type: string;
+  payload: Record<string, string | number | boolean>;
+}
+
+export async function createJobRecord(
+  input: CreateJobRecordInput,
+): Promise<Result<{ id: string }, string>> {
+  try {
+    const job = await prisma.job.create({
+      data: {
+        type: input.type,
+        payload: JSON.parse(JSON.stringify(input.payload)),
+        status: "QUEUED",
+      },
+    });
+    return ok({ id: job.id });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to create job record: ${message}`);
+  }
+}
+
+export async function updateJobRecord(
+  id: string,
+  status: JobStatus,
+  details?: { lastError?: string; attempts?: number },
+): Promise<Result<void, string>> {
+  try {
+    await prisma.job.update({
+      where: { id },
+      data: {
+        status,
+        lastError: details?.lastError,
+        attempts: details?.attempts,
+        processedAt:
+          status === "COMPLETED" || status === "FAILED"
+            ? new Date()
+            : undefined,
+      },
+    });
+    return ok(undefined);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to update job record: ${message}`);
   }
 }
