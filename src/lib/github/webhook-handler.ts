@@ -1,5 +1,9 @@
 import type { EmitterWebhookEvent } from "@octokit/webhooks";
-import { createInstallation, createRepositories } from "@/lib/db/queries";
+import {
+  createInstallation,
+  createRepositories,
+  markInstallationDeleted,
+} from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 import type { Result } from "@/types/results";
@@ -73,6 +77,39 @@ export async function handleInstallationCreated(
   }
 
   return ok({ installationId: result.data.id });
+}
+
+interface InstallationDeletedPayload {
+  installation: {
+    id: number;
+    account: { login: string; type?: string } | { name: string; slug: string };
+  };
+}
+
+export async function handleInstallationDeleted(
+  payload: InstallationDeletedPayload,
+): Promise<Result<{ acknowledged: boolean }, string>> {
+  const { installation } = payload;
+
+  logger.info("Processing installation.deleted event", {
+    githubInstallationId: installation.id,
+  });
+
+  const result = await markInstallationDeleted(installation.id);
+
+  if (!result.success) {
+    logger.error("Failed to mark installation as deleted", {
+      githubInstallationId: installation.id,
+      error: result.error,
+    });
+    return err(result.error);
+  }
+
+  logger.info("Installation marked as deleted", {
+    githubInstallationId: installation.id,
+  });
+
+  return ok({ acknowledged: true });
 }
 
 const REVIEWABLE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);

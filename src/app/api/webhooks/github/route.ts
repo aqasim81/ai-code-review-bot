@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import {
   handleInstallationCreated,
+  handleInstallationDeleted,
   handlePullRequestEvent,
 } from "@/lib/github/webhook-handler";
 import { logger } from "@/lib/logger";
@@ -64,6 +65,24 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({
         received: true,
         installationId: result.data.installationId,
+      });
+    }
+
+    if (eventName === "installation" && payload.action === "deleted") {
+      const result = await handleInstallationDeleted(payload);
+      if (!result.success) {
+        logger.error("Installation deletion handler failed", {
+          error: result.error,
+          deliveryId,
+        });
+        return NextResponse.json(
+          { error: "Internal processing error" },
+          { status: 500 },
+        );
+      }
+      return NextResponse.json({
+        received: true,
+        acknowledged: result.data.acknowledged,
       });
     }
 
