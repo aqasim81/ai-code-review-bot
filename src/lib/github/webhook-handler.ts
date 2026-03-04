@@ -1,6 +1,7 @@
 import type { EmitterWebhookEvent } from "@octokit/webhooks";
 import { createInstallation, createRepositories } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
+import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
@@ -86,20 +87,59 @@ interface PullRequestEventPayload {
   installation?: {
     id: number;
   };
+  before?: string;
 }
 
 export async function handlePullRequestEvent(
   payload: PullRequestEventPayload,
-): Promise<Result<{ acknowledged: boolean }, string>> {
+): Promise<Result<{ acknowledged: boolean; jobId?: string }, string>> {
+  const installationId = payload.installation?.id;
+  if (installationId === undefined) {
+    return err("Missing installation ID in webhook payload");
+  }
+
   logger.info("Processing pull_request event", {
     action: payload.action,
     prNumber: payload.pull_request.number,
     repo: payload.repository.full_name,
-    installationId: payload.installation?.id,
+    installationId,
     commitSha: payload.pull_request.head.sha,
   });
 
-  // Phase 1: Log and acknowledge only.
-  // Phase 4 will add: enqueue BullMQ job for background review processing.
-  return ok({ acknowledged: true });
+  if (payload.action === "synchronize" && payload.before) {
+    const result = await enqueueDeltaReviewJob({
+      installationId,
+      repositoryFullName: payload.repository.full_name,
+      pullRequestNumber: payload.pull_request.number,
+      commitSha: payload.pull_request.head.sha,
+      previousCommitSha: payload.before,
+    });
+
+    if (!result.success) {
+      logger.error("Failed to enqueue delta review job", {
+        error: result.error,
+        repository: payload.repository.full_name,
+      });
+      return err(`Failed to enqueue delta review: ${result.error}`);
+    }
+
+    return ok({ acknowledged: true, jobId: result.data.jobId });
+  }
+
+  const result = await enqueueReviewJob({
+    installationId,
+    repositoryFullName: payload.repository.full_name,
+    pullRequestNumber: payload.pull_request.number,
+    commitSha: payload.pull_request.head.sha,
+  });
+
+  if (!result.success) {
+    logger.error("Failed to enqueue review job", {
+      error: result.error,
+      repository: payload.repository.full_name,
+    });
+    return err(`Failed to enqueue review: ${result.error}`);
+  }
+
+  return ok({ acknowledged: true, jobId: result.data.jobId });
 }

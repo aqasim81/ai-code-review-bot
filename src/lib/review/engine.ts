@@ -435,7 +435,14 @@ export async function executeReview(
     reviewId,
   );
   if (!diffResult.success) return diffResult;
-  const parsedDiff = diffResult.data;
+
+  const parsedDiff: ParsedDiff = request.filePathFilter
+    ? {
+        files: diffResult.data.files.filter((file) =>
+          request.filePathFilter?.includes(file.filePath),
+        ),
+      }
+    : diffResult.data;
 
   if (parsedDiff.files.length === 0) {
     const summary = "No reviewable files in this PR.";
