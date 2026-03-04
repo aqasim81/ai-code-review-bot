@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { STATUS_VARIANT } from "@/components/dashboard/review-constants";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -8,12 +9,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { ReviewStatus } from "@/generated/prisma/enums";
 
 interface ReviewItem {
   readonly id: string;
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
-  readonly status: string;
+  readonly status: ReviewStatus;
   readonly issuesFound: number;
   readonly createdAt: Date;
 }
@@ -21,16 +23,6 @@ interface ReviewItem {
 interface ReviewListProps {
   readonly reviews: readonly ReviewItem[];
 }
-
-const STATUS_VARIANT: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  COMPLETED: "default",
-  FAILED: "destructive",
-  PROCESSING: "secondary",
-  PENDING: "outline",
-};
 
 function formatDate(date: Date): string {
   return new Intl.DateTimeFormat("en-US", {
@@ -74,7 +66,7 @@ export function ReviewList({ reviews }: ReviewListProps) {
             </TableCell>
             <TableCell>#{review.pullRequestNumber}</TableCell>
             <TableCell>
-              <Badge variant={STATUS_VARIANT[review.status] ?? "outline"}>
+              <Badge variant={STATUS_VARIANT[review.status]}>
                 {review.status.toLowerCase()}
               </Badge>
             </TableCell>

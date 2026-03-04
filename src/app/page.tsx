@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth, signIn } from "@/auth";
 import { Button } from "@/components/ui/button";
+import { env } from "@/lib/env";
 
 export default async function LandingPage() {
   const session = await auth();
@@ -43,7 +44,7 @@ export default async function LandingPage() {
           <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
             <Button size="lg" asChild>
               <a
-                href={`https://github.com/apps/${process.env.GITHUB_APP_SLUG ?? "code-review-bot"}/installations/new`}
+                href={`https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new`}
                 target="_blank"
                 rel="noopener noreferrer"
               >

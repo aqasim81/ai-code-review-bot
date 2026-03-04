@@ -1,22 +1,16 @@
+import { CATEGORY_LABELS } from "@/components/dashboard/review-constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { CommentCategory } from "@/generated/prisma/enums";
 
 interface ReviewStatsProps {
   readonly totalReviews: number;
   readonly totalIssuesFound: number;
   readonly recentReviewCount: number;
   readonly categoryBreakdown: ReadonlyArray<{
-    category: string;
+    category: CommentCategory;
     count: number;
   }>;
 }
-
-const CATEGORY_LABELS: Record<string, string> = {
-  SECURITY: "Security",
-  BUGS: "Bugs",
-  PERFORMANCE: "Performance",
-  STYLE: "Style",
-  BEST_PRACTICES: "Best Practices",
-};
 
 export function ReviewStats({
   totalReviews,
@@ -72,9 +66,7 @@ export function ReviewStats({
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold">
-            {topCategory
-              ? (CATEGORY_LABELS[topCategory.category] ?? topCategory.category)
-              : "N/A"}
+            {topCategory ? CATEGORY_LABELS[topCategory.category] : "N/A"}
           </div>
           {topCategory && (
             <p className="text-xs text-muted-foreground">

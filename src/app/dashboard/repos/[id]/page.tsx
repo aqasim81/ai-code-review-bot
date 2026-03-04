@@ -5,7 +5,7 @@ import { SettingsForm } from "@/components/dashboard/settings-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   findInstallationsByGitHubIds,
-  findRepositoryById,
+  findRepositoryByIdForInstallations,
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
 import { mergeWithDefaults } from "@/types/settings";
@@ -36,21 +36,16 @@ export default async function RepoSettingsPage({
     );
   }
 
-  let repo = null;
-  for (const installation of installationsResult.data) {
-    const result = await findRepositoryById(
-      id as RepositoryId,
-      installation.id,
-    );
-    if (result.success && result.data) {
-      repo = result.data;
-      break;
-    }
-  }
+  const repoResult = await findRepositoryByIdForInstallations(
+    id as RepositoryId,
+    installationsResult.data.map((i) => i.id),
+  );
 
-  if (!repo) {
+  if (!repoResult.success || !repoResult.data) {
     notFound();
   }
+
+  const repo = repoResult.data;
 
   const settings = mergeWithDefaults(repo.settings);
 

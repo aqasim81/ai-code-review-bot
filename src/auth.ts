@@ -1,15 +1,16 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { env } from "@/lib/env";
 import { fetchUserInstallations } from "@/lib/github/user-installations";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     GitHub({
-      clientId: process.env.GITHUB_CLIENT_ID,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
     }),
   ],
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: env.NEXTAUTH_SECRET,
   session: {
     strategy: "jwt",
   },
@@ -17,9 +18,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, account, profile }) {
       if (account && profile) {
         token.githubId = Number(profile.id);
-        token.login = profile.login as string;
-        token.avatarUrl = (profile as Record<string, unknown>)
-          .avatar_url as string;
+        token.login = typeof profile.login === "string" ? profile.login : "";
+        const profileRecord = profile as Record<string, unknown>;
+        token.avatarUrl =
+          typeof profileRecord.avatar_url === "string"
+            ? profileRecord.avatar_url
+            : "";
         token.accessToken = account.access_token ?? undefined;
 
         if (account.access_token) {
@@ -36,10 +40,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      session.user.githubId = (token.githubId as number) ?? 0;
-      session.user.login = (token.login as string) ?? "";
-      session.user.avatarUrl = (token.avatarUrl as string) ?? "";
-      session.installationIds = (token.installationIds as number[]) ?? [];
+      session.user.githubId =
+        typeof token.githubId === "number" ? token.githubId : 0;
+      session.user.login = typeof token.login === "string" ? token.login : "";
+      session.user.avatarUrl =
+        typeof token.avatarUrl === "string" ? token.avatarUrl : "";
+      session.installationIds = Array.isArray(token.installationIds)
+        ? (token.installationIds as number[])
+        : [];
       return session;
     },
   },

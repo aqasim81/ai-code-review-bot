@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import {
   findInstallationsByGitHubIds,
-  findRepositoryById,
+  findRepositoryByIdForInstallations,
   updateRepositoryEnabled,
   updateRepositorySettings,
 } from "@/lib/db/queries";
@@ -22,14 +22,13 @@ async function authorizeRepositoryAccess(
   );
   if (!installations.success) return null;
 
-  for (const installation of installations.data) {
-    const repo = await findRepositoryById(repositoryId, installation.id);
-    if (repo.success && repo.data) {
-      return installation.id;
-    }
-  }
+  const repo = await findRepositoryByIdForInstallations(
+    repositoryId,
+    installations.data.map((i) => i.id),
+  );
+  if (!repo.success || !repo.data) return null;
 
-  return null;
+  return repo.data.installationId;
 }
 
 export async function toggleRepositoryEnabledAction(

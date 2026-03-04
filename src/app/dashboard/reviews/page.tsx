@@ -6,7 +6,10 @@ import { ReviewFilters } from "@/components/dashboard/review-filters";
 import { ReviewList } from "@/components/dashboard/review-list";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { ReviewStatus } from "@/generated/prisma/enums";
+import {
+  type ReviewStatus,
+  ReviewStatus as ReviewStatusValues,
+} from "@/generated/prisma/enums";
 import {
   findInstallationsByGitHubIds,
   listRepositoriesForInstallation,
@@ -22,12 +25,7 @@ interface ReviewsPageProps {
   }>;
 }
 
-const VALID_STATUSES = new Set([
-  "PENDING",
-  "PROCESSING",
-  "COMPLETED",
-  "FAILED",
-]);
+const VALID_STATUSES = new Set<string>(Object.values(ReviewStatusValues));
 
 export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
   const params = await searchParams;

@@ -22,6 +22,7 @@ const envSchema = z.object({
   VALKEY_URL: z.string().url(),
   NEXTAUTH_SECRET: z.string().min(1),
   NEXTAUTH_URL: z.string().url(),
+  GITHUB_APP_SLUG: z.string().min(1).default("code-review-bot"),
 });
 
 type Env = z.infer<typeof envSchema>;

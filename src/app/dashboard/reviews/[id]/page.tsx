@@ -2,28 +2,20 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { STATUS_VARIANT } from "@/components/dashboard/review-constants";
 import { ReviewDetail } from "@/components/dashboard/review-detail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   findInstallationsByGitHubIds,
-  getReviewWithComments,
+  getReviewWithCommentsForInstallations,
 } from "@/lib/db/queries";
+import { parseRepositoryFullName } from "@/lib/repository-utils";
 import type { ReviewId } from "@/types/branded";
 
 interface ReviewDetailPageProps {
   params: Promise<{ id: string }>;
 }
-
-const STATUS_VARIANT: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  COMPLETED: "default",
-  FAILED: "destructive",
-  PROCESSING: "secondary",
-  PENDING: "outline",
-};
 
 export default async function ReviewDetailPage({
   params,
@@ -47,21 +39,21 @@ export default async function ReviewDetailPage({
     );
   }
 
-  let review = null;
-  for (const installation of installationsResult.data) {
-    const result = await getReviewWithComments(id as ReviewId, installation.id);
-    if (result.success && result.data) {
-      review = result.data;
-      break;
-    }
-  }
+  const reviewResult = await getReviewWithCommentsForInstallations(
+    id as ReviewId,
+    installationsResult.data.map((i) => i.id),
+  );
 
-  if (!review) {
+  if (!reviewResult.success || !reviewResult.data) {
     notFound();
   }
 
-  const [owner, repo] = review.repositoryFullName.split("/");
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${review.pullRequestNumber}`;
+  const review = reviewResult.data;
+
+  const parsed = parseRepositoryFullName(review.repositoryFullName);
+  const prUrl = parsed
+    ? `https://github.com/${parsed.owner}/${parsed.repo}/pull/${review.pullRequestNumber}`
+    : `https://github.com/${review.repositoryFullName}/pull/${review.pullRequestNumber}`;
 
   return (
     <div>
@@ -69,7 +61,7 @@ export default async function ReviewDetailPage({
         title={`${review.repositoryFullName} #${review.pullRequestNumber}`}
         description={`Commit ${review.commitSha.slice(0, 7)}`}
       >
-        <Badge variant={STATUS_VARIANT[review.status] ?? "outline"}>
+        <Badge variant={STATUS_VARIANT[review.status]}>
           {review.status.toLowerCase()}
         </Badge>
         <Button variant="outline" size="sm" asChild>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { saveRepositorySettingsAction } from "@/app/dashboard/actions";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,9 +44,7 @@ export function SettingsForm({
   repositoryId,
   initialSettings,
 }: SettingsFormProps) {
-  const [nextPatternId, setNextPatternId] = useState(
-    initialSettings.excludePatterns.length,
-  );
+  const nextPatternIdRef = useRef(initialSettings.excludePatterns.length);
   const [excludePatterns, setExcludePatterns] = useState(
     initialSettings.excludePatterns.map((value, i) => ({
       id: i,
@@ -75,8 +73,9 @@ export function SettingsForm({
   });
 
   function addExcludePattern() {
-    setNextPatternId((prev) => prev + 1);
-    setExcludePatterns((prev) => [...prev, { id: nextPatternId, value: "" }]);
+    const id = nextPatternIdRef.current;
+    nextPatternIdRef.current += 1;
+    setExcludePatterns((prev) => [...prev, { id, value: "" }]);
   }
 
   function removeExcludePattern(id: number) {

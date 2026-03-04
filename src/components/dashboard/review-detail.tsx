@@ -1,13 +1,21 @@
+import {
+  CATEGORY_LABELS,
+  SEVERITY_VARIANT,
+} from "@/components/dashboard/review-constants";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import type {
+  CommentCategory,
+  CommentSeverity,
+} from "@/generated/prisma/enums";
 
 interface ReviewComment {
   readonly id: string;
   readonly filePath: string;
   readonly lineNumber: number;
-  readonly category: string;
-  readonly severity: string;
+  readonly category: CommentCategory;
+  readonly severity: CommentSeverity;
   readonly message: string;
   readonly suggestion: string | null;
   readonly confidence: number;
@@ -19,24 +27,6 @@ interface ReviewDetailProps {
   readonly processingTimeMs: number | null;
   readonly comments: readonly ReviewComment[];
 }
-
-const SEVERITY_VARIANT: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  CRITICAL: "destructive",
-  WARNING: "default",
-  SUGGESTION: "secondary",
-  NITPICK: "outline",
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  SECURITY: "Security",
-  BUGS: "Bug",
-  PERFORMANCE: "Performance",
-  STYLE: "Style",
-  BEST_PRACTICES: "Best Practice",
-};
 
 export function ReviewDetail({
   summary,
@@ -86,13 +76,11 @@ export function ReviewDetail({
                 <div key={comment.id}>
                   {index > 0 && <Separator className="mb-4" />}
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge
-                      variant={SEVERITY_VARIANT[comment.severity] ?? "outline"}
-                    >
+                    <Badge variant={SEVERITY_VARIANT[comment.severity]}>
                       {comment.severity.toLowerCase()}
                     </Badge>
                     <Badge variant="outline">
-                      {CATEGORY_LABELS[comment.category] ?? comment.category}
+                      {CATEGORY_LABELS[comment.category]}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
                       Line {comment.lineNumber}

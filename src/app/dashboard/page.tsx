@@ -10,6 +10,7 @@ import {
   getReviewStatsForInstallation,
   listRepositoriesForInstallation,
 } from "@/lib/db/queries";
+import { env } from "@/lib/env";
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -39,7 +40,7 @@ export default async function DashboardPage() {
             </p>
             <Button asChild>
               <a
-                href={`https://github.com/apps/${process.env.GITHUB_APP_SLUG ?? "code-review-bot"}/installations/new`}
+                href={`https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
