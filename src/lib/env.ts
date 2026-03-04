@@ -16,13 +16,12 @@ const envSchema = z.object({
   GITHUB_PRIVATE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: z.string().min(1),
 
-  // Optional — features not yet implemented.
-  // Remove .optional() when the consuming feature is built.
-  GITHUB_CLIENT_ID: z.string().min(1).optional(),
-  GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
+  // Required — consumed by GitHub OAuth (Phase 5: Dashboard)
+  GITHUB_CLIENT_ID: z.string().min(1),
+  GITHUB_CLIENT_SECRET: z.string().min(1),
   VALKEY_URL: z.string().url(),
-  NEXTAUTH_SECRET: z.string().min(1).optional(),
-  NEXTAUTH_URL: z.string().url().optional(),
+  NEXTAUTH_SECRET: z.string().min(1),
+  NEXTAUTH_URL: z.string().url(),
 });
 
 type Env = z.infer<typeof envSchema>;
