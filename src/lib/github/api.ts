@@ -10,7 +10,7 @@ import type {
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
-interface GitHubAppCredentials {
+export interface GitHubAppCredentials {
   readonly appId: string;
   readonly privateKey: string;
 }
