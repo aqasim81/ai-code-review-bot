@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 5: Dashboard UI** — Complete. Auth.js v5 GitHub OAuth, JWT sessions, middleware route protection, shadcn/ui components. Dashboard with installation overview, stats cards, repository settings (categories, severity, exclusions, custom instructions), review history with filtering and pagination, review detail with comments grouped by file. Next: Phase 6 (Testing & Polish).
+**Phase 6: Testing & Polish** — Complete. All 6 phases done. 151 tests across 10 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
 
 ## Tech Stack
 

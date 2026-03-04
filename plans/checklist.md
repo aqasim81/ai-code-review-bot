@@ -121,7 +121,7 @@
 - [x] **Test the implementation** — Verify OAuth flow, settings persistence, review history display
 - [x] **Fix if required** — Address any issues found during review/testing
 - [x] **Update checklist** — Mark completed items above
-- [ ] **Ask to implement next phase**
+- [x] **Ask to implement next phase**
 
 ---
 
@@ -131,17 +131,17 @@
 
 ### Workflow
 
-- [ ] **Planning** — Read the phase file, understand requirements, identify dependencies
-- [ ] **Review the plan** — Verify approach before coding, clarify any unknowns
-- [ ] **Implement the plan**
-  - [ ] Write unit tests — diff parser, AST parser, context builder, prompts, comment mapper
-  - [ ] Write integration tests — webhook handler, review pipeline end-to-end
-  - [ ] Write E2E tests — dashboard login, repo settings, review history
-  - [ ] Write README.md — overview, architecture diagram, setup instructions
-  - [ ] Create `.env.example` with all required variables documented
-  - [ ] Verify 80%+ coverage on `src/lib/review/` and `src/lib/llm/`
-- [ ] **Review the implementation** — Code review for test quality, coverage gaps, documentation accuracy
-- [ ] **Test the implementation** — Run full test suite, verify all passing
-- [ ] **Fix if required** — Address any issues found during review/testing
-- [ ] **Update checklist** — Mark completed items above
-- [ ] **Project complete** — Final review and showcase preparation
+- [x] **Planning** — Read the phase file, understand requirements, identify dependencies
+- [x] **Review the plan** — Verify approach before coding, clarify any unknowns
+- [x] **Implement the plan**
+  - [x] Write unit tests — diff parser, AST parser, context builder, prompts, comment mapper
+  - [x] Write integration tests — webhook handler, review pipeline end-to-end
+  - [x] Write E2E tests — dashboard login, repo settings, review history
+  - [x] Write README.md — overview, architecture diagram, setup instructions
+  - [x] Create `.env.example` with all required variables documented
+  - [x] Verify 80%+ coverage on `src/lib/review/` and `src/lib/llm/`
+- [x] **Review the implementation** — Code review for test quality, coverage gaps, documentation accuracy
+- [x] **Test the implementation** — Run full test suite, verify all passing
+- [x] **Fix if required** — Address any issues found during review/testing
+- [x] **Update checklist** — Mark completed items above
+- [x] **Project complete** — Final review and showcase preparation
