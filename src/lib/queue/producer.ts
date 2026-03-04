@@ -11,11 +11,13 @@ import type { QueueError } from "@/types/errors";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
-let reviewQueue: Queue | null = null;
+const globalForQueue = globalThis as unknown as {
+  reviewQueue: Queue | undefined;
+};
 
 function getReviewQueue(): Queue {
-  if (reviewQueue === null) {
-    reviewQueue = new Queue(REVIEW_QUEUE_NAME, {
+  if (!globalForQueue.reviewQueue) {
+    globalForQueue.reviewQueue = new Queue(REVIEW_QUEUE_NAME, {
       connection: createValkeyConnectionOptions(),
       defaultJobOptions: {
         attempts: 3,
@@ -26,7 +28,7 @@ function getReviewQueue(): Queue {
       },
     });
   }
-  return reviewQueue;
+  return globalForQueue.reviewQueue;
 }
 
 function buildDeterministicJobId(
@@ -37,10 +39,10 @@ function buildDeterministicJobId(
   return `review-${repositoryFullName}-${pullRequestNumber}-${commitSha}`;
 }
 
-export async function enqueueReviewJob(
-  payload: ReviewJobPayload,
+async function enqueueJob(
+  jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
-  const jobData: ReviewJobData = { type: "review-pr", payload };
+  const { payload } = jobData;
   const jobId = buildDeterministicJobId(
     payload.repositoryFullName,
     payload.pullRequestNumber,
@@ -48,10 +50,11 @@ export async function enqueueReviewJob(
   );
 
   try {
-    const job = await getReviewQueue().add("review-pr", jobData, { jobId });
+    const job = await getReviewQueue().add(jobData.type, jobData, { jobId });
 
     logger.info("Review job enqueued", {
       jobId: job.id,
+      type: jobData.type,
       repository: payload.repositoryFullName,
       pullRequest: payload.pullRequestNumber,
       commitSha: payload.commitSha,
@@ -60,6 +63,7 @@ export async function enqueueReviewJob(
     return ok({ jobId: job.id ?? jobId });
   } catch (error) {
     logger.error("Failed to enqueue review job", {
+      type: jobData.type,
       error: error instanceof Error ? error.message : String(error),
       repository: payload.repositoryFullName,
     });
@@ -67,35 +71,14 @@ export async function enqueueReviewJob(
   }
 }
 
+export async function enqueueReviewJob(
+  payload: ReviewJobPayload,
+): Promise<Result<{ jobId: string }, QueueError>> {
+  return enqueueJob({ type: "review-pr", payload });
+}
+
 export async function enqueueDeltaReviewJob(
   payload: DeltaReviewJobPayload,
 ): Promise<Result<{ jobId: string }, QueueError>> {
-  const jobData: ReviewJobData = { type: "review-pr-delta", payload };
-  const jobId = buildDeterministicJobId(
-    payload.repositoryFullName,
-    payload.pullRequestNumber,
-    payload.commitSha,
-  );
-
-  try {
-    const job = await getReviewQueue().add("review-pr-delta", jobData, {
-      jobId,
-    });
-
-    logger.info("Delta review job enqueued", {
-      jobId: job.id,
-      repository: payload.repositoryFullName,
-      pullRequest: payload.pullRequestNumber,
-      commitSha: payload.commitSha,
-      previousCommitSha: payload.previousCommitSha,
-    });
-
-    return ok({ jobId: job.id ?? jobId });
-  } catch (error) {
-    logger.error("Failed to enqueue delta review job", {
-      error: error instanceof Error ? error.message : String(error),
-      repository: payload.repositoryFullName,
-    });
-    return err("QUEUE_ENQUEUE_FAILED");
-  }
+  return enqueueJob({ type: "review-pr-delta", payload });
 }

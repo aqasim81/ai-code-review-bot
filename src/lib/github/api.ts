@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import { Octokit } from "@octokit/rest";
+import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import type { GitHubError } from "@/types/errors";
 import type {
@@ -104,6 +105,15 @@ async function checkRateLimit(octokit: Octokit): Promise<void> {
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // Refresh 5 minutes before expiry
 const GITHUB_TOKEN_LIFETIME_MS = 60 * 60 * 1000; // Tokens last 1 hour
+
+export function createGitHubServiceFromEnv(
+  installationId: number,
+): GitHubService {
+  return createGitHubService(
+    { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_PRIVATE_KEY },
+    installationId,
+  );
+}
 
 export function createGitHubService(
   credentials: GitHubAppCredentials,

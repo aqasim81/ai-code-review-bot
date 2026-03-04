@@ -282,6 +282,7 @@ export async function findLastReviewedCommitForPullRequest(
 interface CreateJobRecordInput {
   type: string;
   payload: Record<string, string | number | boolean>;
+  initialStatus?: "QUEUED" | "PROCESSING";
 }
 
 export async function createJobRecord(
@@ -292,7 +293,7 @@ export async function createJobRecord(
       data: {
         type: input.type,
         payload: input.payload,
-        status: "QUEUED",
+        status: input.initialStatus ?? "QUEUED",
       },
     });
     return ok({ id: job.id });

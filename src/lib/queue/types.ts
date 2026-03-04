@@ -1,8 +1,6 @@
 export const REVIEW_QUEUE_NAME = "review-jobs" as const;
 export const DEAD_LETTER_QUEUE_NAME = "review-jobs-dead-letter" as const;
 
-export type ReviewJobType = "review-pr" | "review-pr-delta";
-
 export interface ReviewJobPayload {
   readonly installationId: number;
   readonly repositoryFullName: string;
@@ -18,8 +16,10 @@ export type ReviewJobData =
   | {
       readonly type: "review-pr";
       readonly payload: ReviewJobPayload;
+      readonly dbJobId?: string;
     }
   | {
       readonly type: "review-pr-delta";
       readonly payload: DeltaReviewJobPayload;
+      readonly dbJobId?: string;
     };

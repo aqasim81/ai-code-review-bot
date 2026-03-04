@@ -4,9 +4,7 @@ import {
   findLastReviewedCommitForPullRequest,
   updateJobRecord,
 } from "@/lib/db/queries";
-import { env } from "@/lib/env";
-import type { GitHubAppCredentials } from "@/lib/github/api";
-import { createGitHubService } from "@/lib/github/api";
+import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
 import type { ReviewJobData } from "@/lib/queue/types";
@@ -16,13 +14,6 @@ import type { GitHubService } from "@/types/github";
 import type { ReviewRequest } from "@/types/review";
 
 const DELTA_FILE_THRESHOLD = 50;
-
-function buildGitHubCredentials(): GitHubAppCredentials {
-  return {
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_PRIVATE_KEY,
-  };
-}
 
 async function buildDeltaFilePathFilter(
   repositoryFullName: string,
@@ -80,6 +71,39 @@ async function buildDeltaFilePathFilter(
   return changedFiles;
 }
 
+async function getOrCreateDbJobId(
+  job: Job<ReviewJobData>,
+): Promise<string | null> {
+  if (job.attemptsMade > 0) {
+    const existingId = job.data.dbJobId;
+    return typeof existingId === "string" ? existingId : null;
+  }
+
+  const { type, payload } = job.data;
+  const jobRecordResult = await createJobRecord({
+    type,
+    payload: {
+      installationId: payload.installationId,
+      repositoryFullName: payload.repositoryFullName,
+      pullRequestNumber: payload.pullRequestNumber,
+      commitSha: payload.commitSha,
+    },
+    initialStatus: "PROCESSING",
+  });
+
+  if (!jobRecordResult.success) {
+    logger.warn("Failed to create job record in database", {
+      jobId: job.id,
+      error: jobRecordResult.error,
+    });
+    return null;
+  }
+
+  const dbJobId = jobRecordResult.data.id;
+  await job.updateData({ ...job.data, dbJobId });
+  return dbJobId;
+}
+
 export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
   const { type, payload } = job.data;
 
@@ -91,35 +115,9 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     attempt: job.attemptsMade + 1,
   });
 
-  let dbJobId: string | null = null;
+  const dbJobId = await getOrCreateDbJobId(job);
 
-  if (job.attemptsMade === 0) {
-    const jobRecordResult = await createJobRecord({
-      type,
-      payload: {
-        installationId: payload.installationId,
-        repositoryFullName: payload.repositoryFullName,
-        pullRequestNumber: payload.pullRequestNumber,
-        commitSha: payload.commitSha,
-      },
-    });
-
-    if (jobRecordResult.success) {
-      dbJobId = jobRecordResult.data.id;
-      await updateJobRecord(dbJobId, "PROCESSING");
-    } else {
-      logger.warn("Failed to create job record in database", {
-        jobId: job.id,
-        error: jobRecordResult.error,
-      });
-    }
-  }
-
-  const credentials = buildGitHubCredentials();
-  const githubService = createGitHubService(
-    credentials,
-    payload.installationId,
-  );
+  const githubService = createGitHubServiceFromEnv(payload.installationId);
   const llmService = createLlmClient();
 
   let request: ReviewRequest = {
