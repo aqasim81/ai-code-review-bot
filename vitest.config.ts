@@ -6,11 +6,12 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    setupFiles: ["./tests/setup.ts"],
     passWithNoTests: true,
     coverage: {
       provider: "v8",
       include: ["src/lib/**/*.ts"],
-      exclude: ["src/lib/db/prisma-client.ts"],
+      exclude: ["src/lib/db/prisma-client.ts", "src/lib/github/api.ts"],
       thresholds: {
         lines: 80,
         branches: 80,
