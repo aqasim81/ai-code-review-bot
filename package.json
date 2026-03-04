@@ -16,7 +16,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "validate": "biome check . && tsc --noEmit && vitest run --coverage"
+    "validate": "biome check . && tsc --noEmit && vitest run --coverage",
+    "worker:dev": "tsx --tsconfig tsconfig.worker.json worker/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -53,6 +54,7 @@
     "playwright": "^1.58.2",
     "prisma": "^7.4.1",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^4.0.18"
   }
