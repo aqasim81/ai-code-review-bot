@@ -20,3 +20,8 @@ export type ReviewEngineError =
   | "REVIEW_DIFF_PARSE_FAILED"
   | "REVIEW_LLM_FAILED"
   | "REVIEW_DB_ERROR";
+
+export type QueueError =
+  | "QUEUE_CONNECTION_FAILED"
+  | "QUEUE_ENQUEUE_FAILED"
+  | "QUEUE_JOB_STALE";
