@@ -98,7 +98,7 @@
 - [x] **Test the implementation** — Verify queue processing, retry behavior, delta review correctness
 - [x] **Fix if required** — Address any issues found during review/testing
 - [x] **Update checklist** — Mark completed items above
-- [ ] **Ask to implement next phase**
+- [x] **Ask to implement next phase**
 
 ---
 
@@ -108,19 +108,19 @@
 
 ### Workflow
 
-- [ ] **Planning** — Read the phase file, understand requirements, identify dependencies
-- [ ] **Review the plan** — Verify approach before coding, clarify any unknowns
-- [ ] **Implement the plan**
-  - [ ] Implement GitHub OAuth flow for dashboard authentication
-  - [ ] Implement session management
-  - [ ] Build installation flow — landing page, install button, OAuth callback, redirect
-  - [ ] Build repository settings page — repo list, enable/disable, category config, exclusion patterns
-  - [ ] Build review history page — list reviews, filter by repo/date/severity
-  - [ ] Build review detail view — summary, comments, link to PR, stats
-- [ ] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
-- [ ] **Test the implementation** — Verify OAuth flow, settings persistence, review history display
-- [ ] **Fix if required** — Address any issues found during review/testing
-- [ ] **Update checklist** — Mark completed items above
+- [x] **Planning** — Read the phase file, understand requirements, identify dependencies
+- [x] **Review the plan** — Verify approach before coding, clarify any unknowns
+- [x] **Implement the plan**
+  - [x] Implement GitHub OAuth flow for dashboard authentication
+  - [x] Implement session management
+  - [x] Build installation flow — landing page, install button, OAuth callback, redirect
+  - [x] Build repository settings page — repo list, enable/disable, category config, exclusion patterns
+  - [x] Build review history page — list reviews, filter by repo/date/severity
+  - [x] Build review detail view — summary, comments, link to PR, stats
+- [x] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
+- [x] **Test the implementation** — Verify OAuth flow, settings persistence, review history display
+- [x] **Fix if required** — Address any issues found during review/testing
+- [x] **Update checklist** — Mark completed items above
 - [ ] **Ask to implement next phase**
 
 ---
