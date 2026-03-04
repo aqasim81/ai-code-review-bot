@@ -75,6 +75,8 @@ export async function handleInstallationCreated(
   return ok({ installationId: result.data.id });
 }
 
+const REVIEWABLE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
+
 interface PullRequestEventPayload {
   action: string;
   pull_request: {
@@ -93,6 +95,10 @@ interface PullRequestEventPayload {
 export async function handlePullRequestEvent(
   payload: PullRequestEventPayload,
 ): Promise<Result<{ acknowledged: boolean; jobId?: string }, string>> {
+  if (!REVIEWABLE_ACTIONS.has(payload.action)) {
+    return ok({ acknowledged: true });
+  }
+
   const installationId = payload.installation?.id;
   if (installationId === undefined) {
     return err("Missing installation ID in webhook payload");

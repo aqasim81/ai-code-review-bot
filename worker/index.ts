@@ -43,6 +43,66 @@ async function moveToDeadLetterQueue(
   }
 }
 
+function handleJobCompleted(job: {
+  id?: string;
+  name: string;
+  data: ReviewJobData;
+}): void {
+  logger.info("Job completed", {
+    jobId: job.id,
+    name: job.name,
+    repository: job.data.payload.repositoryFullName,
+    pullRequest: job.data.payload.pullRequestNumber,
+  });
+}
+
+async function handleJobFailed(
+  deadLetterQueue: Queue,
+  job:
+    | {
+        id?: string;
+        name: string;
+        data: ReviewJobData;
+        attemptsMade: number;
+        opts: { attempts?: number };
+      }
+    | undefined,
+  error: Error,
+): Promise<void> {
+  if (!job) {
+    logger.error("Job failed with no job reference", { error: error.message });
+    return;
+  }
+
+  const maxAttempts = job.opts.attempts ?? 3;
+  const isFinalAttempt = job.attemptsMade >= maxAttempts;
+
+  if (isFinalAttempt) {
+    logger.error("Job permanently failed after exhausting retries", {
+      jobId: job.id,
+      name: job.name,
+      repository: job.data.payload.repositoryFullName,
+      pullRequest: job.data.payload.pullRequestNumber,
+      error: error.message,
+      attemptsMade: job.attemptsMade,
+    });
+    await moveToDeadLetterQueue(
+      deadLetterQueue,
+      job.id,
+      job.data,
+      error.message,
+    );
+  } else {
+    logger.warn("Job attempt failed, will retry", {
+      jobId: job.id,
+      repository: job.data.payload.repositoryFullName,
+      error: error.message,
+      attemptsMade: job.attemptsMade,
+      maxAttempts,
+    });
+  }
+}
+
 function createReviewWorker(): {
   worker: Worker<ReviewJobData>;
   deadLetterQueue: Queue;
@@ -68,60 +128,14 @@ function createReviewWorker(): {
     },
   );
 
-  worker.on("completed", (job) => {
-    logger.info("Job completed", {
-      jobId: job.id,
-      name: job.name,
-      repository: job.data.payload.repositoryFullName,
-      pullRequest: job.data.payload.pullRequestNumber,
-    });
-  });
-
-  worker.on("failed", async (job, error) => {
-    if (!job) {
-      logger.error("Job failed with no job reference", {
-        error: error.message,
-      });
-      return;
-    }
-
-    const maxAttempts = job.opts.attempts ?? 3;
-    const isFinalAttempt = job.attemptsMade >= maxAttempts;
-
-    if (isFinalAttempt) {
-      logger.error("Job permanently failed after exhausting retries", {
-        jobId: job.id,
-        name: job.name,
-        repository: job.data.payload.repositoryFullName,
-        pullRequest: job.data.payload.pullRequestNumber,
-        error: error.message,
-        attemptsMade: job.attemptsMade,
-      });
-
-      await moveToDeadLetterQueue(
-        deadLetterQueue,
-        job.id,
-        job.data,
-        error.message,
-      );
-    } else {
-      logger.warn("Job attempt failed, will retry", {
-        jobId: job.id,
-        repository: job.data.payload.repositoryFullName,
-        error: error.message,
-        attemptsMade: job.attemptsMade,
-        maxAttempts,
-      });
-    }
-  });
-
-  worker.on("stalled", (jobId) => {
-    logger.warn("Job stalled", { jobId });
-  });
-
-  worker.on("error", (error) => {
-    logger.error("Worker error", { error: error.message });
-  });
+  worker.on("completed", handleJobCompleted);
+  worker.on("failed", (job, error) =>
+    handleJobFailed(deadLetterQueue, job, error),
+  );
+  worker.on("stalled", (jobId) => logger.warn("Job stalled", { jobId }));
+  worker.on("error", (error) =>
+    logger.error("Worker error", { error: error.message }),
+  );
 
   return { worker, deadLetterQueue };
 }
@@ -138,18 +152,24 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("Received shutdown signal, closing worker", { signal });
-    await worker.close();
-    await deadLetterQueue.close();
-    logger.info("Worker closed gracefully");
+    try {
+      await worker.close();
+      await deadLetterQueue.close();
+      logger.info("Worker closed gracefully");
+    } catch (shutdownError) {
+      logger.error("Shutdown failed", {
+        error:
+          shutdownError instanceof Error
+            ? shutdownError.message
+            : String(shutdownError),
+      });
+      process.exit(1);
+    }
     process.exit(0);
   };
 
-  process.on("SIGINT", () => {
-    void shutdown("SIGINT");
-  });
-  process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
-  });
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   logger.info("Review worker started and listening for jobs");
 }

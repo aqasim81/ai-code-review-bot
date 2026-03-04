@@ -20,7 +20,7 @@ const envSchema = z.object({
   // Remove .optional() when the consuming feature is built.
   GITHUB_CLIENT_ID: z.string().min(1).optional(),
   GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
-  VALKEY_URL: z.string().min(1),
+  VALKEY_URL: z.string().url(),
   NEXTAUTH_SECRET: z.string().min(1).optional(),
   NEXTAUTH_URL: z.string().url().optional(),
 });

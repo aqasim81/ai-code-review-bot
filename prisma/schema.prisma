@@ -91,6 +91,7 @@ model Review {
   comments          ReviewComment[]
 
   @@unique([repositoryId, commitSha])
+  @@index([repositoryId, pullRequestNumber, status, createdAt])
   @@map("reviews")
 }
 

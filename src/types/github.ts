@@ -20,9 +20,18 @@ export interface PostedReviewResult {
   readonly postedCommentCount: number;
 }
 
+export type CommitComparisonFileStatus =
+  | "added"
+  | "removed"
+  | "modified"
+  | "renamed"
+  | "copied"
+  | "changed"
+  | "unchanged";
+
 export interface CommitComparisonFile {
   readonly filename: string;
-  readonly status: string;
+  readonly status: CommitComparisonFileStatus;
 }
 
 export interface CommitComparisonResult {

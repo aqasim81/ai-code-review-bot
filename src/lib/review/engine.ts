@@ -439,10 +439,11 @@ export async function executeReview(
   );
   if (!diffResult.success) return diffResult;
 
-  const parsedDiff: ParsedDiff = request.filePathFilter
+  const filterPaths = request.filePathFilter;
+  const parsedDiff: ParsedDiff = filterPaths
     ? {
-        files: diffResult.data.files.filter((file) =>
-          request.filePathFilter?.includes(file.filePath),
+        files: diffResult.data.files.filter((f) =>
+          filterPaths.includes(f.filePath),
         ),
       }
     : diffResult.data;

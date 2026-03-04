@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import type { GitHubError } from "@/types/errors";
 import type {
+  CommitComparisonFileStatus,
   CommitComparisonResult,
   GitHubService,
   PostedReviewResult,
@@ -307,7 +308,7 @@ export function createGitHubService(
 
         const files = (response.data.files ?? []).map((file) => ({
           filename: file.filename,
-          status: file.status ?? "modified",
+          status: (file.status ?? "modified") as CommitComparisonFileStatus,
         }));
 
         return ok({ files });

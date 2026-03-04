@@ -257,30 +257,8 @@ export async function failReview(
 
 // --- Job queries (Phase 4: Background Processing) ---
 
-export async function findLastReviewedCommitForPullRequest(
-  repositoryFullName: string,
-  pullRequestNumber: number,
-): Promise<Result<{ commitSha: string } | null, string>> {
-  try {
-    const review = await prisma.review.findFirst({
-      where: {
-        pullRequestNumber,
-        status: "COMPLETED",
-        repository: { fullName: repositoryFullName },
-      },
-      orderBy: { createdAt: "desc" },
-      select: { commitSha: true },
-    });
-    return ok(review ? { commitSha: review.commitSha } : null);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find last reviewed commit: ${message}`);
-  }
-}
-
 interface CreateJobRecordInput {
-  type: string;
+  type: "review-pr" | "review-pr-delta";
   payload: Record<string, string | number | boolean>;
   initialStatus?: "QUEUED" | "PROCESSING";
 }
