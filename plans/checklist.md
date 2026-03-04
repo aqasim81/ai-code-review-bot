@@ -84,20 +84,20 @@
 
 ### Workflow
 
-- [ ] **Planning** — Read the phase file, understand requirements, identify dependencies
-- [ ] **Review the plan** — Verify approach before coding, clarify any unknowns
-- [ ] **Implement the plan**
-  - [ ] Set up BullMQ with Valkey connection
-  - [ ] Define job types (`review-pr`, `review-pr-delta`) and concurrency limits
-  - [ ] Build standalone worker process (`worker/index.ts`)
-  - [ ] Implement retry logic — 3 attempts with exponential backoff
-  - [ ] Implement dead letter queue for permanently failed jobs
-  - [ ] Implement stale job detection (fail if processing > 5 minutes)
-  - [ ] Implement delta reviews — review only files changed since last reviewed commit
-- [ ] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
-- [ ] **Test the implementation** — Verify queue processing, retry behavior, delta review correctness
-- [ ] **Fix if required** — Address any issues found during review/testing
-- [ ] **Update checklist** — Mark completed items above
+- [x] **Planning** — Read the phase file, understand requirements, identify dependencies
+- [x] **Review the plan** — Verify approach before coding, clarify any unknowns
+- [x] **Implement the plan**
+  - [x] Set up BullMQ with Valkey connection
+  - [x] Define job types (`review-pr`, `review-pr-delta`) and concurrency limits
+  - [x] Build standalone worker process (`worker/index.ts`)
+  - [x] Implement retry logic — 3 attempts with exponential backoff
+  - [x] Implement dead letter queue for permanently failed jobs
+  - [x] Implement stale job detection (fail if processing > 5 minutes)
+  - [x] Implement delta reviews — review only files changed since last reviewed commit
+- [x] **Review the implementation** — Code review for quality, security, adherence to CLAUDE.md standards
+- [x] **Test the implementation** — Verify queue processing, retry behavior, delta review correctness
+- [x] **Fix if required** — Address any issues found during review/testing
+- [x] **Update checklist** — Mark completed items above
 - [ ] **Ask to implement next phase**
 
 ---

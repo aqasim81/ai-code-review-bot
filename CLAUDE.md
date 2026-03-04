@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 3: GitHub Review Posting** — Complete. Comment mapper, GitHub API client (App auth, token refresh), review orchestrator with full pipeline, DB queries for review CRUD. Next: Phase 4 (Background Processing).
+**Phase 4: Background Processing** — Complete. BullMQ queue with Valkey, standalone worker (concurrency 3), exponential backoff retries (10s/30s/90s), dead letter queue, stale job detection, delta reviews via GitHub compare API. Next: Phase 5 (Dashboard UI).
 
 ## Tech Stack
 
