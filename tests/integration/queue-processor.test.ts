@@ -74,9 +74,11 @@ function setupDefaultMocks() {
 }
 
 describe("processReviewJob", () => {
+  let mocks: ReturnType<typeof setupDefaultMocks>;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    setupDefaultMocks();
+    mocks = setupDefaultMocks();
   });
 
   it("processes a full review job end-to-end", async () => {
@@ -164,8 +166,7 @@ describe("processReviewJob", () => {
   });
 
   it("processes delta review job with file path filter", async () => {
-    const { mockGithubService } = setupDefaultMocks();
-    vi.mocked(mockGithubService.compareCommits).mockResolvedValue(
+    vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       ok({
         files: [
           { filename: "src/changed.ts", status: "modified" },
@@ -178,7 +179,7 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
-    expect(mockGithubService.compareCommits).toHaveBeenCalledWith(
+    expect(mocks.mockGithubService.compareCommits).toHaveBeenCalledWith(
       "test-owner",
       "test-repo",
       "prev-sha",
@@ -194,9 +195,8 @@ describe("processReviewJob", () => {
   });
 
   it("falls back to full review when delta comparison fails", async () => {
-    const { mockGithubService } = setupDefaultMocks();
-    vi.mocked(mockGithubService.compareCommits).mockResolvedValue(
-      err("GITHUB_API_ERROR" as never),
+    vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
+      err("GITHUB_UNKNOWN_ERROR"),
     );
 
     const job = createDeltaJob();
@@ -212,12 +212,11 @@ describe("processReviewJob", () => {
   });
 
   it("falls back to full review when delta file count exceeds threshold (50)", async () => {
-    const { mockGithubService } = setupDefaultMocks();
     const manyFiles = Array.from({ length: 51 }, (_, i) => ({
       filename: `src/file-${i}.ts`,
       status: "modified" as const,
     }));
-    vi.mocked(mockGithubService.compareCommits).mockResolvedValue(
+    vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       ok({ files: manyFiles }),
     );
 

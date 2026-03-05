@@ -6,6 +6,7 @@ import {
   createReviewFinding,
   createReviewRequest,
   createReviewResult,
+  installationId,
   repositoryId,
   reviewId,
 } from "../helpers/factories";
@@ -34,7 +35,7 @@ function setupSuccessfulDbMocks() {
     repo: "test-repo",
   });
   vi.mocked(findRepositoryByFullName).mockResolvedValue(
-    ok({ id: repositoryId(), installationId: "inst-1" as never }),
+    ok({ id: repositoryId(), installationId: installationId() }),
   );
   vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
   vi.mocked(createReviewRecord).mockResolvedValue(ok({ id: reviewId() }));
@@ -145,7 +146,7 @@ describe("executeReview — review pipeline", () => {
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi
         .fn()
-        .mockResolvedValue(err("GITHUB_API_ERROR" as never)),
+        .mockResolvedValue(err("GITHUB_UNKNOWN_ERROR")),
     });
 
     const result = await executeReview(

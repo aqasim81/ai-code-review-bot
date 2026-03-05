@@ -14,7 +14,8 @@ import {
   handlePullRequestEvent,
 } from "@/lib/github/webhook-handler";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
-import type { InstallationId } from "@/types/branded";
+import { err, ok } from "@/types/results";
+import { installationId } from "../helpers/factories";
 
 describe("handleInstallationCreated", () => {
   beforeEach(() => {
@@ -37,14 +38,10 @@ describe("handleInstallationCreated", () => {
   }
 
   it("saves installation and repositories to DB", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce({
-      success: true,
-      data: { id: "inst-1" as InstallationId },
-    });
-    vi.mocked(createRepositories).mockResolvedValueOnce({
-      success: true,
-      data: { count: 1 },
-    });
+    vi.mocked(createInstallation).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1") }),
+    );
+    vi.mocked(createRepositories).mockResolvedValueOnce(ok({ count: 1 }));
 
     const result = await handleInstallationCreated(createPayload());
 
@@ -76,20 +73,18 @@ describe("handleInstallationCreated", () => {
   });
 
   it("returns error when DB save fails", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce({
-      success: false,
-      error: "DB connection error",
-    });
+    vi.mocked(createInstallation).mockResolvedValueOnce(
+      err("DB connection error"),
+    );
 
     const result = await handleInstallationCreated(createPayload());
     expect(result.success).toBe(false);
   });
 
   it("handles installation with no repositories", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce({
-      success: true,
-      data: { id: "inst-1" as InstallationId },
-    });
+    vi.mocked(createInstallation).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1") }),
+    );
 
     const result = await handleInstallationCreated(
       createPayload({ repositories: [] }),
@@ -100,10 +95,9 @@ describe("handleInstallationCreated", () => {
   });
 
   it("detects Organization account type", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce({
-      success: true,
-      data: { id: "inst-1" as InstallationId },
-    });
+    vi.mocked(createInstallation).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1") }),
+    );
 
     const payload = createPayload({
       installation: {
@@ -129,10 +123,7 @@ describe("handleInstallationDeleted", () => {
   });
 
   it("marks installation as deleted", async () => {
-    vi.mocked(markInstallationDeleted).mockResolvedValueOnce({
-      success: true,
-      data: undefined,
-    });
+    vi.mocked(markInstallationDeleted).mockResolvedValueOnce(ok(undefined));
 
     const result = await handleInstallationDeleted({
       installation: {
@@ -146,10 +137,7 @@ describe("handleInstallationDeleted", () => {
   });
 
   it("returns error when DB update fails", async () => {
-    vi.mocked(markInstallationDeleted).mockResolvedValueOnce({
-      success: false,
-      error: "DB error",
-    });
+    vi.mocked(markInstallationDeleted).mockResolvedValueOnce(err("DB error"));
 
     const result = await handleInstallationDeleted({
       installation: {
@@ -181,10 +169,7 @@ describe("handlePullRequestEvent", () => {
   }
 
   it("enqueues review job for 'opened' action", async () => {
-    vi.mocked(enqueueReviewJob).mockResolvedValueOnce({
-      success: true,
-      data: { jobId: "job-1" },
-    });
+    vi.mocked(enqueueReviewJob).mockResolvedValueOnce(ok({ jobId: "job-1" }));
 
     const result = await handlePullRequestEvent(createPrPayload());
 
@@ -202,10 +187,9 @@ describe("handlePullRequestEvent", () => {
   });
 
   it("enqueues delta review job for 'synchronize' with 'before' sha", async () => {
-    vi.mocked(enqueueDeltaReviewJob).mockResolvedValueOnce({
-      success: true,
-      data: { jobId: "delta-job-1" },
-    });
+    vi.mocked(enqueueDeltaReviewJob).mockResolvedValueOnce(
+      ok({ jobId: "delta-job-1" }),
+    );
 
     const result = await handlePullRequestEvent(
       createPrPayload({ action: "synchronize", before: "prev-sha" }),
@@ -243,10 +227,9 @@ describe("handlePullRequestEvent", () => {
   });
 
   it("returns error when queue enqueue fails", async () => {
-    vi.mocked(enqueueReviewJob).mockResolvedValueOnce({
-      success: false,
-      error: "QUEUE_ENQUEUE_FAILED" as const,
-    });
+    vi.mocked(enqueueReviewJob).mockResolvedValueOnce(
+      err("QUEUE_ENQUEUE_FAILED" as const),
+    );
 
     const result = await handlePullRequestEvent(createPrPayload());
     expect(result.success).toBe(false);

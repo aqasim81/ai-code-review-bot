@@ -67,6 +67,10 @@ describe("createLlmClient", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
 
+    // vi.resetModules() is required here: the vi.mock factory above references
+    // module-level classes (MockRateLimitError etc.) which are in the temporal
+    // dead zone during the initial hoisted evaluation. resetModules forces
+    // re-evaluation after classes are initialized.
     vi.resetModules();
     const mod = await import("@/lib/llm/client");
     createLlmClient = mod.createLlmClient;

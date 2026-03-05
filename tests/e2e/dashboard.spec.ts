@@ -20,21 +20,15 @@ test.describe("Landing page", () => {
 });
 
 test.describe("Protected routes redirect when unauthenticated", () => {
-  test("/dashboard redirects to landing page", async ({ page }) => {
-    await page.goto("/dashboard");
-    await page.waitForURL("/");
-    expect(page.url()).toMatch(/\/$/);
-  });
-
-  test("/dashboard/repos redirects to landing page", async ({ page }) => {
-    await page.goto("/dashboard/repos");
-    await page.waitForURL("/");
-    expect(page.url()).toMatch(/\/$/);
-  });
-
-  test("/dashboard/reviews redirects to landing page", async ({ page }) => {
-    await page.goto("/dashboard/reviews");
-    await page.waitForURL("/");
-    expect(page.url()).toMatch(/\/$/);
-  });
+  for (const route of [
+    "/dashboard",
+    "/dashboard/repos",
+    "/dashboard/reviews",
+  ]) {
+    test(`${route} redirects to landing page`, async ({ page }) => {
+      await page.goto(route);
+      await page.waitForURL("/");
+      expect(page.url()).toMatch(/\/$/);
+    });
+  }
 });
