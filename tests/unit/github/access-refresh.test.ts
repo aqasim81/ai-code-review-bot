@@ -277,4 +277,42 @@ describe("refreshAccessState after a requested refresh fails", () => {
 
     expect((await promise).state.pending).toBe(false);
   });
+
+  // A regular refresh that keeps failing must not end in empty access that
+  // looks like "no installations" while GitHub is down (#118).
+  it("marks a retryable failure pending once the access has expired", async () => {
+    const { promise } = refreshAt(FETCHED_AT + 10 * MINUTE, {
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    });
+
+    expect((await promise).state).toEqual({
+      access: EMPTY_USER_ACCESS,
+      fetchedAt: FETCHED_AT,
+      checkedAt: FETCHED_AT + 10 * MINUTE,
+      pending: true,
+    });
+  });
+
+  it("marks a retryable failure pending when the access expires before the next retry", async () => {
+    const failed = await refreshAt(FETCHED_AT + 9.5 * MINUTE, {
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    }).promise;
+    expect(failed.state.pending).toBe(true);
+
+    const expired = await refreshAt(FETCHED_AT + 10 * MINUTE, {
+      state: failed.state,
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    }).promise;
+
+    expect(expired.state.access).toEqual(EMPTY_USER_ACCESS);
+    expect(expired.state.pending).toBe(true);
+  });
+
+  it("does not mark a permanent failure pending when the access expires", async () => {
+    const { promise } = refreshAt(FETCHED_AT + 10 * MINUTE, {
+      fetchAccess: fetchFailingWith(TOKEN_REVOKED),
+    });
+
+    expect((await promise).state.pending).toBe(false);
+  });
 });
