@@ -8,7 +8,7 @@ import {
 import { buildReviewPrompt } from "@/lib/llm/prompts";
 import { logger } from "@/lib/logger";
 import { exponentialDelayMs, sleep } from "@/lib/retry";
-import type { LLMError, LLMService } from "@/types/llm";
+import type { LLMError, LLMService, ReviewPromptOptions } from "@/types/llm";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type { ReviewChunk, ReviewResult } from "@/types/review";
@@ -41,7 +41,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
   return {
     async analyzeReviewChunk(
       chunk: ReviewChunk,
-      customInstructions: string,
+      promptOptions: ReviewPromptOptions,
     ): Promise<Result<ReviewResult, LLMError>> {
       if (apiKey === undefined || apiKey.length === 0) {
         return err("LLM_API_KEY_MISSING");
@@ -52,7 +52,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
         sdkClient = new LlmSdk({ apiKey, maxRetries: 0 });
       }
 
-      const prompt = buildReviewPrompt(chunk, customInstructions);
+      const prompt = buildReviewPrompt(chunk, promptOptions);
 
       const result = await callWithRetry(
         sdkClient,

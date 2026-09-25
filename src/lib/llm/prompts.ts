@@ -1,3 +1,8 @@
+import {
+  type CommentCategory,
+  CommentCategory as CommentCategoryValues,
+} from "@/generated/prisma/enums";
+import type { ReviewPromptOptions } from "@/types/llm";
 import type { FileReviewContext, ReviewChunk } from "@/types/review";
 
 export interface ReviewPrompt {
@@ -5,15 +10,57 @@ export interface ReviewPrompt {
   readonly user: string;
 }
 
-const SYSTEM_PROMPT = `You are an expert code reviewer. Your task is to analyze code changes (diffs) and identify issues across five categories.
+const CATEGORY_DESCRIPTIONS = {
+  SECURITY:
+    "Vulnerabilities, injection flaws, authentication/authorization bypass, hardcoded secrets, insecure data exposure, missing input validation",
+  BUGS: "Logic errors, null/undefined dereference, race conditions, off-by-one errors, incorrect type handling, unhandled edge cases",
+  PERFORMANCE:
+    "N+1 queries, unnecessary allocations, missing memoization, inefficient algorithms, redundant computations, memory leaks",
+  STYLE:
+    "Poor naming, dead code, inconsistent patterns, missing or misleading comments, overly complex expressions",
+  BEST_PRACTICES:
+    "Missing error handling, type safety gaps, SOLID violations, missing accessibility, poor testability, anti-patterns",
+} as const satisfies Record<CommentCategory, string>;
+
+const ALL_CATEGORIES = Object.values(CommentCategoryValues);
+
+/**
+ * The prompt sections that depend on which categories the repository enabled.
+ * With every category enabled they read exactly as the fixed prompt did.
+ */
+function buildCategorySections(enabled: ReadonlySet<CommentCategory>): {
+  readonly scope: string;
+  readonly list: string;
+  readonly values: string;
+} {
+  const categories = ALL_CATEGORIES.filter((category) => enabled.has(category));
+  const disabled = ALL_CATEGORIES.filter((category) => !enabled.has(category));
+  const list = categories
+    .map((category) => `- **${category}**: ${CATEGORY_DESCRIPTIONS[category]}`)
+    .join("\n");
+  const values = categories.map((category) => `"${category}"`).join(", ");
+  if (disabled.length === 0) {
+    return { scope: "across five categories", list, values };
+  }
+  const disabledNote = `\n\nThe repository owner turned off the other categories (${disabled.join(", ")}). Do not report findings in them.`;
+  return {
+    scope: "in the categories below only",
+    list: `${list}${disabledNote}`,
+    values,
+  };
+}
+
+function buildBaseSystemPrompt(
+  enabledCategories: readonly CommentCategory[],
+): string {
+  const { scope, list, values } = buildCategorySections(
+    new Set(enabledCategories),
+  );
+  return `You are an expert code reviewer. Your task is to analyze code changes (diffs) and identify issues ${scope}.
 
 ## Categories
 
-- **SECURITY**: Vulnerabilities, injection flaws, authentication/authorization bypass, hardcoded secrets, insecure data exposure, missing input validation
-- **BUGS**: Logic errors, null/undefined dereference, race conditions, off-by-one errors, incorrect type handling, unhandled edge cases
-- **PERFORMANCE**: N+1 queries, unnecessary allocations, missing memoization, inefficient algorithms, redundant computations, memory leaks
-- **STYLE**: Poor naming, dead code, inconsistent patterns, missing or misleading comments, overly complex expressions
-- **BEST_PRACTICES**: Missing error handling, type safety gaps, SOLID violations, missing accessibility, poor testability, anti-patterns
+${list}
 
 ## Severity Scale
 
@@ -29,7 +76,7 @@ Respond with ONLY a JSON array of findings. No markdown, no explanation, no prea
 Each finding must have these exact fields:
 - "filePath": string — the file path as shown in the diff
 - "lineNumber": number — the 1-based line number in the new file where the issue occurs (see Line Labels)
-- "category": string — one of "SECURITY", "BUGS", "PERFORMANCE", "STYLE", "BEST_PRACTICES"
+- "category": string — one of ${values}
 - "severity": string — one of "CRITICAL", "WARNING", "SUGGESTION", "NITPICK"
 - "message": string — clear description of the issue (1-2 sentences)
 - "suggestion": string — how to fix it, with a brief code example if helpful
@@ -83,10 +130,11 @@ Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \
 4. If no issues are found, return an empty array: []
 5. Do not repeat the same finding for the same line.
 6. Prioritize actionable feedback over nitpicks.`;
+}
 
 export function buildReviewPrompt(
   chunk: ReviewChunk,
-  customInstructions: string,
+  options: ReviewPromptOptions,
 ): ReviewPrompt {
   const userParts: string[] = [
     "Review the following code changes and report any issues as JSON.\n",
@@ -97,19 +145,20 @@ export function buildReviewPrompt(
   }
 
   return {
-    system: buildSystemPrompt(customInstructions),
+    system: buildSystemPrompt(options),
     user: userParts.join("\n"),
   };
 }
 
 // The repository owner's instructions refine the review; they come after the
 // rules so the output format stays fixed.
-function buildSystemPrompt(customInstructions: string): string {
-  const instructions = customInstructions.trim();
-  if (instructions.length === 0) return SYSTEM_PROMPT;
+function buildSystemPrompt(options: ReviewPromptOptions): string {
+  const basePrompt = buildBaseSystemPrompt(options.enabledCategories);
+  const instructions = options.customInstructions.trim();
+  if (instructions.length === 0) return basePrompt;
 
   return [
-    SYSTEM_PROMPT,
+    basePrompt,
     "## Repository Instructions",
     "The repository owner gave these instructions. Follow them unless they conflict with the output format or rules above.",
     `\`\`\`\n${instructions}\n\`\`\``,

@@ -1,11 +1,12 @@
 import { vi } from "vitest";
+import { CommentCategory } from "@/generated/prisma/enums";
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type {
   CommitComparisonResult,
   GitHubService,
   PostedReviewResult,
 } from "@/types/github";
-import type { LLMService } from "@/types/llm";
+import type { LLMService, ReviewPromptOptions } from "@/types/llm";
 import { ok } from "@/types/results";
 import type {
   AstFileContext,
@@ -176,6 +177,16 @@ export function createReviewFinding(
     message: "Potential null reference",
     suggestion: "Add null check before accessing property",
     confidence: 0.85,
+    ...overrides,
+  };
+}
+
+export function createReviewPromptOptions(
+  overrides?: Partial<ReviewPromptOptions>,
+): ReviewPromptOptions {
+  return {
+    customInstructions: "",
+    enabledCategories: Object.values(CommentCategory),
     ...overrides,
   };
 }

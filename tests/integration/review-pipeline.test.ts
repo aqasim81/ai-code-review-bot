@@ -1558,7 +1558,7 @@ describe("executeReview — repository settings", () => {
 
     expect(llm.analyzeReviewChunk).toHaveBeenCalledWith(
       expect.anything(),
-      "We use tabs.",
+      expect.objectContaining({ customInstructions: "We use tabs." }),
     );
   });
 
