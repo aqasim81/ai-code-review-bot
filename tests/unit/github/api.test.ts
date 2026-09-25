@@ -285,3 +285,35 @@ describe("installation token error classification", () => {
     expect(octokitMocks.getPullRequest).not.toHaveBeenCalled();
   });
 });
+
+describe("fetchPullRequestHeadSha", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    octokitMocks.createInstallationAccessToken.mockResolvedValue({
+      data: { token: "installation-token" },
+    });
+    octokitMocks.rateLimitGet.mockResolvedValue({
+      data: { resources: { core: { remaining: 5000, reset: 0 } } },
+    });
+  });
+
+  it("returns the SHA of the pull request's head commit", async () => {
+    octokitMocks.getPullRequest.mockResolvedValue({
+      data: { head: { sha: "head-sha" } },
+    });
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).fetchPullRequestHeadSha(
+      "owner",
+      "repo",
+      42,
+    );
+
+    expect(result).toEqual({ success: true, data: "head-sha" });
+    expect(octokitMocks.getPullRequest).toHaveBeenCalledWith({
+      owner: "owner",
+      repo: "repo",
+      pull_number: 42,
+    });
+  });
+});

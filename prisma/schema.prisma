@@ -24,6 +24,7 @@ enum ReviewStatus {
   PROCESSING
   COMPLETED
   FAILED
+  SUPERSEDED
 }
 
 enum JobStatus {

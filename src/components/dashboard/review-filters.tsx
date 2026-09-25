@@ -24,6 +24,7 @@ const STATUS_OPTIONS = [
   { value: "FAILED", label: "Failed" },
   { value: "PROCESSING", label: "Processing" },
   { value: "PENDING", label: "Pending" },
+  { value: "SUPERSEDED", label: "Superseded" },
 ] as const;
 
 export function ReviewFilters({ repositories }: ReviewFiltersProps) {

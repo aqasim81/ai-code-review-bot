@@ -256,6 +256,21 @@ function createGitHubService(
       );
     },
 
+    fetchPullRequestHeadSha(owner, repo, pullNumber) {
+      return callGitHub(
+        "Failed to fetch pull request head",
+        { owner, repo, pullNumber },
+        async (octokit) => {
+          const { data } = await octokit.pulls.get({
+            owner,
+            repo,
+            pull_number: pullNumber,
+          });
+          return ok(data.head.sha);
+        },
+      );
+    },
+
     fetchFileContent(owner, repo, filePath, ref) {
       return callGitHub(
         "Failed to fetch file content",

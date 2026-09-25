@@ -370,7 +370,8 @@ export async function failStaleReview(
 
 /**
  * Atomically claims an existing review for the given job and clears anything
- * left by the earlier attempt. A review can be claimed when it is FAILED, when
+ * left by the earlier attempt. A review can be claimed when it is FAILED or
+ * SUPERSEDED (the pull request's head is back at its commit), when
  * it is PROCESSING under the same queue job (that attempt is no longer
  * running), or when it has been PROCESSING or PENDING since before
  * `staleBefore`. Returns null when another job still owns the review.
@@ -387,6 +388,7 @@ export async function claimExistingReview(
         id: reviewId,
         OR: [
           { status: "FAILED" },
+          { status: "SUPERSEDED" },
           { status: "PROCESSING", claimedByJobId: claim.jobId },
           staleReviewFilter(claim.staleBefore),
         ],
@@ -526,6 +528,33 @@ export async function markReviewCompleted(
       data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
     });
     return ok(count > 0);
+  });
+}
+
+/**
+ * Marks a review SUPERSEDED: newer pushes replaced its commit before it was
+ * posted. Its findings are dropped since they never reached GitHub, and it is
+ * not a base for later push reviews. Returns false (and writes nothing) when
+ * the claim was lost.
+ */
+export async function markReviewSuperseded(
+  claim: ReviewClaimRef,
+  summary: string,
+  processingTimeMs: number,
+): Promise<Result<boolean, string>> {
+  return runQuery("Failed to mark review superseded", async () => {
+    const superseded = await updateReviewAndDropComments(
+      claim.reviewId,
+      currentClaimFilter(claim),
+      {
+        status: "SUPERSEDED",
+        summary,
+        issuesFound: 0,
+        processingTimeMs,
+        completedAt: new Date(),
+      },
+    );
+    return ok(superseded);
   });
 }
 
