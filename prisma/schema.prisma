@@ -92,7 +92,8 @@ model Review {
   processingTimeMs    Int?
   claimedByJobId      String?
   claimToken          String?
-  processingStartedAt DateTime?
+  /// Set when the review is claimed and renewed while the owning attempt runs.
+  claimRenewedAt      DateTime? @map("processingStartedAt")
   createdAt           DateTime        @default(now())
   completedAt         DateTime?
   comments            ReviewComment[]

@@ -4,12 +4,24 @@ import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
 /**
- * A review PROCESSING for longer than this may be reclaimed by any job, not
- * just a retry of the job that claimed it, and is expired by the sweep. Chosen
- * to be well beyond a normal review run; a slower run that is still alive loses
- * its claim token and stops at its next write or before posting.
+ * A review whose claim was not renewed for longer than this may be reclaimed by
+ * any job, not just a retry of the job that claimed it, and is expired by the
+ * sweep. The attempt that holds the claim renews it every
+ * REVIEW_CLAIM_RENEWAL_INTERVAL_MS while it runs (up to
+ * REVIEW_CLAIM_MAX_RENEWAL_MS), so a slow review is not taken for an abandoned
+ * one; a review whose attempt died becomes stale after this long.
  */
 export const STALE_PROCESSING_REVIEW_MS = 30 * 60 * 1000;
+
+/** Leaves room for several missed renewals before the stale cutoff. */
+export const REVIEW_CLAIM_RENEWAL_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Renewal proves the process is alive, not that the review is progressing. A
+ * run still going after this long is taken as hung: it stops renewing, and the
+ * sweep expires its review once the stale cutoff passes.
+ */
+export const REVIEW_CLAIM_MAX_RENEWAL_MS = 3 * 60 * 60 * 1000;
 
 /**
  * Marks reviews stuck unfinished past the stale cutoff as FAILED, so the

@@ -10,6 +10,7 @@ import {
   failStaleReview,
   failUnfinishedJobRecord,
   markReviewCompleted,
+  renewReviewClaim,
   saveReviewFindings,
   updateJobRecord,
 } from "@/lib/db/queries";
@@ -256,6 +257,61 @@ describe("job record status writes fenced by the run token (#115)", () => {
     expect(await claimJobRecord(randomUUID())).toEqual({
       success: true,
       data: null,
+    });
+  });
+});
+
+describe("review claim renewal guarded by the claim (#114)", () => {
+  async function claimRenewedAnHourAgo(): Promise<ReviewClaimRef> {
+    const claim = await claimNewReview();
+    await testPrisma.review.update({
+      where: { id: claim.reviewId },
+      data: { claimRenewedAt: new Date(Date.now() - HOUR_MS) },
+    });
+    return claim;
+  }
+
+  it("renews a claim that is still current", async () => {
+    const claim = await claimRenewedAnHourAgo();
+
+    expect(await renewReviewClaim(claim)).toEqual({
+      success: true,
+      data: true,
+    });
+    const row = await testPrisma.review.findUniqueOrThrow({
+      where: { id: claim.reviewId },
+    });
+    expect(row.claimRenewedAt?.getTime()).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("does not bring back a review the sweep expired", async () => {
+    const claim = await claimRenewedAnHourAgo();
+    await failStaleReview(claim.reviewId, new Date());
+
+    expect(await renewReviewClaim(claim)).toEqual({
+      success: true,
+      data: false,
+    });
+    expect(
+      await testPrisma.review.findUniqueOrThrow({
+        where: { id: claim.reviewId },
+      }),
+    ).toMatchObject({ status: "FAILED", claimToken: null });
+  });
+
+  it("does not renew a claim another attempt took over", async () => {
+    const claim = await claimNewReview();
+    await failReview(claim, "LLM timeout");
+    const retry = await claimExistingReview(claim.reviewId, {
+      jobId: "job-2",
+      pullRequestNumber: 7,
+      staleBefore: new Date(Date.now() - HOUR_MS),
+    });
+    if (!retry.success || retry.data === null) throw new Error("no reclaim");
+
+    expect(await renewReviewClaim(claim)).toEqual({
+      success: true,
+      data: false,
     });
   });
 });
