@@ -15,6 +15,9 @@ const envSchema = z.object({
   GITHUB_APP_ID: z.string().min(1),
   GITHUB_PRIVATE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: z.string().min(1),
+  // The review model. Configurable so a retired model can be replaced without
+  // a code change.
+  LLM_MODEL_ID: z.string().min(1).default("claude-sonnet-5"),
 
   // Required — consumed by GitHub OAuth (Phase 5: Dashboard)
   GITHUB_CLIENT_ID: z.string().min(1),

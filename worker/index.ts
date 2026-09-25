@@ -1,4 +1,5 @@
 import { type Job, Queue, Worker } from "bullmq";
+import { env } from "@/lib/env";
 import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
@@ -153,6 +154,7 @@ async function main(): Promise<void> {
     queue: REVIEW_QUEUE_NAME,
     lockDurationMs: LOCK_DURATION_MS,
     stalledIntervalMs: STALE_INTERVAL_MS,
+    model: env.LLM_MODEL_ID,
   });
 
   const { worker, deadLetterQueue } = createReviewWorker();
