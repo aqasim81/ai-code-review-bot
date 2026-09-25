@@ -31,10 +31,10 @@ import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
 import { err, ok } from "@/types/results";
 
-// A new file with enough added lines (~27k estimated tokens) that two of them
-// cannot share one 30k-token review chunk.
+// A new file with enough added lines (~24k estimated tokens) that two of them
+// cannot share one 30k-token review chunk, with margin either way.
 function largeAddedFileDiff(filePath: string): string {
-  const lineCount = 1000;
+  const lineCount = 800;
   const lines = Array.from(
     { length: lineCount },
     (_, index) => `+export const value${index} = "${"x".repeat(80)}";`,

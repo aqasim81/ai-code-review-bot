@@ -406,7 +406,7 @@ function prepareGitHubReview(
   commitSha: string,
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
-  llmSummary: string,
+  summaryText: string,
 ): PreparedGitHubReview {
   const { mappedComments, unmappedFindings } = mapFindingsToGitHubComments(
     findings,
@@ -425,7 +425,7 @@ function prepareGitHubReview(
     payload: {
       commitSha,
       body: buildReviewSummary(
-        llmSummary,
+        summaryText,
         mappedComments.length,
         unmappedFindings,
       ),
