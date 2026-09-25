@@ -144,6 +144,26 @@ describe("createLlmClient", () => {
     );
   });
 
+  it("sends the configured model when none is passed", async () => {
+    mockSuccessfulResponse();
+    const service = createLlmClient({ apiKey: "test-key" });
+    await service.analyzeReviewChunk(createReviewChunk(), "");
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "configured-model" }),
+    );
+  });
+
+  it("leaves room for thinking in the output limit by default", async () => {
+    mockSuccessfulResponse();
+    const service = createLlmClient({ apiKey: "test-key" });
+    await service.analyzeReviewChunk(createReviewChunk(), "");
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ max_tokens: 16_000 }),
+    );
+  });
+
   it("returns findings and token usage on success", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
