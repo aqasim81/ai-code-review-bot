@@ -17,6 +17,14 @@ import {
 import type { RepositoryId } from "@/types/branded";
 import { ok } from "@/types/results";
 
+const REPO_ID = "5f0c6a3e-8b8e-4f7c-9a52-2f6d6f1d2a11";
+const OTHER_REPO_ID = "9b1d2c3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e";
+
+const REFUSED_WITHOUT_PERMISSION = {
+  success: false,
+  error: expect.stringContaining("admin or maintain"),
+};
+
 const ACCESS = {
   githubInstallationIds: [10],
   accessibleGithubRepoIds: [1, 2],
@@ -38,7 +46,7 @@ function signInWithAccess(): void {
 
 function repositoryWithGithubId(githubRepoId: number) {
   return ok({
-    id: "repo-1" as RepositoryId,
+    id: REPO_ID as RepositoryId,
     githubRepoId,
     fullName: "acme/app",
     settings: {},
@@ -66,11 +74,11 @@ describe("dashboard repository actions", () => {
       repositoryWithGithubId(1),
     );
 
-    const result = await toggleRepositoryEnabledAction("repo-1", false);
+    const result = await toggleRepositoryEnabledAction(REPO_ID, false);
 
     expect(result).toEqual({ success: true });
     expect(updateRepositoryEnabled).toHaveBeenCalledWith(
-      "repo-1",
+      REPO_ID,
       false,
       ACCESS,
     );
@@ -81,15 +89,14 @@ describe("dashboard repository actions", () => {
       repositoryWithGithubId(2),
     );
 
-    const toggle = await toggleRepositoryEnabledAction("repo-1", false);
+    const toggle = await toggleRepositoryEnabledAction(REPO_ID, false);
     const save = await saveRepositorySettingsAction(
-      "repo-1",
+      REPO_ID,
       validSettingsForm(),
     );
 
-    expect(toggle.success).toBe(false);
-    expect(toggle.error).toContain("admin or maintain");
-    expect(save.success).toBe(false);
+    expect(toggle).toEqual(REFUSED_WITHOUT_PERMISSION);
+    expect(save).toEqual(REFUSED_WITHOUT_PERMISSION);
     expect(updateRepositoryEnabled).not.toHaveBeenCalled();
     expect(updateRepositorySettings).not.toHaveBeenCalled();
   });
@@ -97,17 +104,37 @@ describe("dashboard repository actions", () => {
   it("reports a repository outside the user's scope as unauthorized", async () => {
     vi.mocked(findAccessibleRepositoryById).mockResolvedValue(ok(null));
 
-    const result = await toggleRepositoryEnabledAction("repo-9", true);
+    const result = await toggleRepositoryEnabledAction(OTHER_REPO_ID, true);
 
     expect(result).toEqual({ success: false, error: "Unauthorized" });
     expect(updateRepositoryEnabled).not.toHaveBeenCalled();
+  });
+
+  it("rejects arguments the UI never sends before touching the database", async () => {
+    const objectId = await toggleRepositoryEnabledAction(
+      { not: "" } as unknown as string,
+      false,
+    );
+    const notBoolean = await toggleRepositoryEnabledAction(
+      REPO_ID,
+      "false" as unknown as boolean,
+    );
+    const notUuid = await saveRepositorySettingsAction(
+      "repo-1",
+      validSettingsForm(),
+    );
+
+    for (const result of [objectId, notBoolean, notUuid]) {
+      expect(result).toEqual({ success: false, error: "Unauthorized" });
+    }
+    expect(findAccessibleRepositoryById).not.toHaveBeenCalled();
   });
 
   it("refuses when there is no session", async () => {
     mockedAuth.mockResolvedValue(null);
 
     const result = await saveRepositorySettingsAction(
-      "repo-1",
+      REPO_ID,
       validSettingsForm(),
     );
 
@@ -122,11 +149,10 @@ describe("dashboard repository actions", () => {
     vi.mocked(updateRepositorySettings).mockResolvedValue(ok(false));
 
     const result = await saveRepositorySettingsAction(
-      "repo-1",
+      REPO_ID,
       validSettingsForm(),
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("admin or maintain");
+    expect(result).toEqual(REFUSED_WITHOUT_PERMISSION);
   });
 });

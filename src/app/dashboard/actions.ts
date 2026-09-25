@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { auth } from "@/auth";
 import {
   findAccessibleRepositoryById,
@@ -12,7 +13,12 @@ import type { AccessScope } from "@/types/access";
 import type { RepositoryId } from "@/types/branded";
 import { repositorySettingsSchema } from "@/types/settings";
 
-type ActionResult = { success: boolean; error?: string };
+type ActionResult = { success: true } | { success: false; error: string };
+
+// Server actions are callable with any serialisable arguments, not only the
+// ones the UI sends, so check their shape before using them in a query.
+const repositoryIdSchema = z.string().uuid();
+const isEnabledSchema = z.boolean();
 
 const UNAUTHORIZED: ActionResult = { success: false, error: "Unauthorized" };
 const FORBIDDEN: ActionResult = {
@@ -43,6 +49,12 @@ export async function toggleRepositoryEnabledAction(
   repositoryId: string,
   isEnabled: boolean,
 ): Promise<ActionResult> {
+  if (
+    !repositoryIdSchema.safeParse(repositoryId).success ||
+    !isEnabledSchema.safeParse(isEnabled).success
+  ) {
+    return UNAUTHORIZED;
+  }
   const authorization = await authorizeRepositoryManagement(
     repositoryId as RepositoryId,
   );
@@ -66,6 +78,12 @@ export async function saveRepositorySettingsAction(
   repositoryId: string,
   formData: FormData,
 ): Promise<ActionResult> {
+  if (
+    !repositoryIdSchema.safeParse(repositoryId).success ||
+    !(formData instanceof FormData)
+  ) {
+    return UNAUTHORIZED;
+  }
   const authorization = await authorizeRepositoryManagement(
     repositoryId as RepositoryId,
   );
