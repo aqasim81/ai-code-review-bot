@@ -709,15 +709,13 @@ export async function renewJobRecord(
 
 /**
  * An unfinished job record whose run last renewed it before `renewedBefore`.
- * Records from before renewals were recorded fall back to `createdAt`.
+ * A record without a renewal time was written by a worker that predates
+ * renewals and may still be running it, so it is never matched.
  */
 function abandonedJobRecordFilter(renewedBefore: Date) {
   return {
     status: { in: UNFINISHED_JOB_STATUSES },
-    OR: [
-      { runRenewedAt: { lt: renewedBefore } },
-      { runRenewedAt: null, createdAt: { lt: renewedBefore } },
-    ],
+    runRenewedAt: { lt: renewedBefore },
   };
 }
 

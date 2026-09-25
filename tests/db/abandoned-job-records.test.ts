@@ -75,6 +75,24 @@ describe("job records whose run stopped reporting (#113)", () => {
     ).toMatchObject({ status: "COMPLETED" });
   });
 
+  it("leaves a record written by a worker that predates renewals", async () => {
+    const run = await createRun();
+    await testPrisma.job.update({
+      where: { id: run.id },
+      data: {
+        runRenewedAt: null,
+        createdAt: new Date(Date.now() - 60 * MINUTE_MS),
+      },
+    });
+
+    const result = await expireAbandonedJobRecords(Date.now());
+
+    expect(result).toEqual({ success: true, data: { expiredCount: 0 } });
+    expect(
+      await testPrisma.job.findUniqueOrThrow({ where: { id: run.id } }),
+    ).toMatchObject({ status: "PROCESSING" });
+  });
+
   it("does not renew a record the sweep already failed", async () => {
     const run = await createRun();
     await lastRenewedMinutesAgo(run.id, 31);
