@@ -64,6 +64,18 @@ describe("fetchUserRepositoryAccessShared", () => {
     expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(2);
   });
 
+  it("does not let a forced refresh reuse a regular result from moments before", async () => {
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    await fetchUserRepositoryAccessShared("token", { now: 0, forced: false });
+    await fetchUserRepositoryAccessShared("token", {
+      now: 3_000,
+      forced: true,
+    });
+
+    expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps different users' tokens apart", async () => {
     const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 

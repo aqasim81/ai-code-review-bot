@@ -11,6 +11,7 @@ const FORCED_MAX_AGE_MS = 10_000;
 
 interface CacheEntry {
   readonly fetchedAt: number;
+  readonly forced: boolean;
   readonly result: Promise<Result<FetchedAccess, string>>;
 }
 
@@ -46,11 +47,15 @@ export async function fetchUserRepositoryAccessShared(
   }
 
   const key = await hashToken(accessToken);
-  const maxAge = forced ? FORCED_MAX_AGE_MS : REGULAR_MAX_AGE_MS;
   const hit = cache.get(key);
-  if (hit && now - hit.fetchedAt < maxAge) return hit.result;
+  // A forced refresh only reuses another forced one: a regular result from
+  // just before the user installed the app would miss the new installation.
+  const reusable = forced
+    ? hit?.forced === true && now - hit.fetchedAt < FORCED_MAX_AGE_MS
+    : hit !== undefined && now - hit.fetchedAt < REGULAR_MAX_AGE_MS;
+  if (hit && reusable) return hit.result;
 
   const result = fetchAndStamp(accessToken, now);
-  cache.set(key, { fetchedAt: now, result });
+  cache.set(key, { fetchedAt: now, forced, result });
   return result;
 }
