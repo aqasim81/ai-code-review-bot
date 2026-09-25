@@ -12,6 +12,9 @@ import {
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 import { ok } from "@/types/results";
 
+const HEAD_SHA = "a".repeat(40);
+const BEFORE_SHA = "b".repeat(40);
+
 const signer = new Webhooks({ secret: "test-webhook-secret" });
 
 interface WebhookRequestOptions {
@@ -47,7 +50,7 @@ async function buildWebhookRequest({
 function createPullRequestBody(overrides?: Record<string, unknown>): string {
   return JSON.stringify({
     action: "opened",
-    pull_request: { number: 42, head: { sha: "abc123" } },
+    pull_request: { number: 42, head: { sha: HEAD_SHA } },
     repository: { full_name: "test-owner/test-repo" },
     installation: { id: 12345 },
     ...overrides,
@@ -110,7 +113,48 @@ describe("POST /api/webhooks/github", () => {
       eventName: "pull_request",
       body: {
         action: "opened",
-        pull_request: { number: "42", head: { sha: "abc123" } },
+        pull_request: { number: "42", head: { sha: HEAD_SHA } },
+        repository: { full_name: "test-owner/test-repo" },
+        installation: { id: 12345 },
+      },
+    },
+    {
+      name: "pull_request.opened with a head SHA that is not a commit SHA",
+      eventName: "pull_request",
+      body: {
+        action: "opened",
+        pull_request: { number: 42, head: { sha: "abc:123" } },
+        repository: { full_name: "test-owner/test-repo" },
+        installation: { id: 12345 },
+      },
+    },
+    {
+      name: "pull_request.opened with a repository name containing ':'",
+      eventName: "pull_request",
+      body: {
+        action: "opened",
+        pull_request: { number: 42, head: { sha: HEAD_SHA } },
+        repository: { full_name: "test-owner/test:repo" },
+        installation: { id: 12345 },
+      },
+    },
+    {
+      name: "pull_request.opened with a repository name that is not owner/repo",
+      eventName: "pull_request",
+      body: {
+        action: "opened",
+        pull_request: { number: 42, head: { sha: HEAD_SHA } },
+        repository: { full_name: "test-owner/test-repo/extra" },
+        installation: { id: 12345 },
+      },
+    },
+    {
+      name: "pull_request.synchronize with a 'before' that is not a commit SHA",
+      eventName: "pull_request",
+      body: {
+        action: "synchronize",
+        before: "not-a-sha",
+        pull_request: { number: 42, head: { sha: HEAD_SHA } },
         repository: { full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
@@ -164,20 +208,23 @@ describe("POST /api/webhooks/github", () => {
 
     expect(response.status).toBe(200);
     expect(enqueueReviewJob).toHaveBeenCalledWith(
-      expect.objectContaining({ pullRequestNumber: 42, commitSha: "abc123" }),
+      expect.objectContaining({ pullRequestNumber: 42, commitSha: HEAD_SHA }),
     );
   });
 
   it("enqueues a delta review for a 'synchronize' pull request", async () => {
     const request = await buildWebhookRequest({
-      body: createPullRequestBody({ action: "synchronize", before: "prev" }),
+      body: createPullRequestBody({
+        action: "synchronize",
+        before: BEFORE_SHA,
+      }),
     });
 
     const response = await POST(request);
 
     expect(response.status).toBe(200);
     expect(enqueueDeltaReviewJob).toHaveBeenCalledWith(
-      expect.objectContaining({ previousCommitSha: "prev" }),
+      expect.objectContaining({ previousCommitSha: BEFORE_SHA }),
     );
   });
 

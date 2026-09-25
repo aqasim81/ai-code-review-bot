@@ -16,6 +16,9 @@ import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 import { err, ok } from "@/types/results";
 import { installationId } from "../helpers/factories";
 
+const HEAD_SHA = "a".repeat(40);
+const BEFORE_SHA = "b".repeat(40);
+
 describe("handleInstallationCreated", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -182,7 +185,7 @@ describe("handlePullRequestEvent", () => {
       action: "opened",
       pull_request: {
         number: 42,
-        head: { sha: "abc123" },
+        head: { sha: HEAD_SHA },
       },
       repository: { full_name: "test-owner/test-repo" },
       installation: { id: 12345 },
@@ -203,7 +206,7 @@ describe("handlePullRequestEvent", () => {
         installationId: 12345,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
-        commitSha: "abc123",
+        commitSha: HEAD_SHA,
       }),
     );
   });
@@ -214,7 +217,7 @@ describe("handlePullRequestEvent", () => {
     );
 
     const result = await handlePullRequestEvent(
-      createPrPayload({ action: "synchronize", before: "prev-sha" }),
+      createPrPayload({ action: "synchronize", before: BEFORE_SHA }),
     );
 
     expect(result.success).toBe(true);
@@ -222,7 +225,7 @@ describe("handlePullRequestEvent", () => {
     expect(result.data.jobId).toBe("delta-job-1");
     expect(enqueueDeltaReviewJob).toHaveBeenCalledWith(
       expect.objectContaining({
-        previousCommitSha: "prev-sha",
+        previousCommitSha: BEFORE_SHA,
       }),
     );
   });
