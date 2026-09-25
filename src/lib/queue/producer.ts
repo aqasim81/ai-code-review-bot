@@ -1,4 +1,4 @@
-import { type Job, Queue } from "bullmq";
+import { type DefaultJobOptions, type Job, Queue } from "bullmq";
 import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
@@ -12,17 +12,20 @@ const globalForQueue = globalThis as unknown as {
   reviewQueue: Queue | undefined;
 };
 
+export const REVIEW_JOB_OPTIONS = {
+  attempts: 3,
+  // Custom backoff: 10s → 30s → 90s. The worker's backoff strategy is
+  // calculateBackoffDelay (worker/review-worker.ts).
+  backoff: { type: "custom" },
+  removeOnComplete: { count: 100 },
+  removeOnFail: { count: 500 },
+} as const satisfies DefaultJobOptions;
+
 function getReviewQueue(): Queue {
   if (!globalForQueue.reviewQueue) {
     globalForQueue.reviewQueue = new Queue(REVIEW_QUEUE_NAME, {
       connection: createValkeyConnectionOptions(),
-      defaultJobOptions: {
-        attempts: 3,
-        // Custom backoff: 10s → 30s → 90s. Strategy defined in worker/index.ts via calculateBackoffDelay.
-        backoff: { type: "custom" },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 500 },
-      },
+      defaultJobOptions: REVIEW_JOB_OPTIONS,
     });
   }
   return globalForQueue.reviewQueue;

@@ -13,8 +13,8 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
-    # The db suite runs the queries against a real Postgres, the same image
-    # as docker-compose.yml.
+    # The db and queue suites run against a real Postgres and Valkey, the
+    # same images as docker-compose.yml.
     services:
       postgres:
         image: postgres:16-alpine
@@ -26,6 +26,15 @@ jobs:
           - 5433:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -68,3 +77,6 @@ jobs:
 
       - name: Database tests
         run: pnpm test:db
+
+      - name: Queue tests
+        run: pnpm test:queue

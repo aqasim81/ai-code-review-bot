@@ -1,20 +1,12 @@
-import { type Job, Queue, Worker } from "bullmq";
+import { Queue } from "bullmq";
 import { env } from "@/lib/env";
 import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
-import {
-  calculateBackoffDelay,
-  isFinalJobFailure,
-  processReviewJob,
-  recordFinalJobFailure,
-} from "@/lib/queue/processor";
-import { reviewJobLogContext } from "@/lib/queue/producer";
-import type { ReviewJobData } from "@/lib/queue/types";
 import { DEAD_LETTER_QUEUE_NAME, REVIEW_QUEUE_NAME } from "@/lib/queue/types";
 import { expireStaleReviews } from "@/lib/review/stale-reviews";
+import { createReviewWorker, REVIEW_WORKER_CONCURRENCY } from "./review-worker";
 
-const CONCURRENCY = 3;
 const STALE_INTERVAL_MS = 30_000;
 const LOCK_DURATION_MS = 5 * 60 * 1000;
 const STALE_REVIEW_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
@@ -42,124 +34,24 @@ function startStaleReviewSweep(): NodeJS.Timeout {
   return setInterval(sweep, STALE_REVIEW_SWEEP_INTERVAL_MS);
 }
 
-function createDeadLetterQueue(): Queue {
-  return new Queue(DEAD_LETTER_QUEUE_NAME, {
-    connection: createValkeyConnectionOptions(),
-  });
-}
-
-async function moveToDeadLetterQueue(
-  deadLetterQueue: Queue,
-  jobId: string | undefined,
-  jobData: ReviewJobData,
-  errorMessage: string,
-): Promise<void> {
-  try {
-    await deadLetterQueue.add("dead-letter", {
-      originalJobId: jobId,
-      originalData: jobData,
-      error: errorMessage,
-      failedAt: new Date().toISOString(),
-    });
-
-    logger.error("Job moved to dead letter queue", {
-      ...reviewJobLogContext(jobId, jobData),
-      error: errorMessage,
-    });
-  } catch (dlqError) {
-    logger.error("Failed to move job to dead letter queue", {
-      jobId,
-      error: describeError(dlqError),
-    });
-  }
-}
-
-function handleJobCompleted(job: Job<ReviewJobData>): void {
-  logger.info("Job completed", reviewJobLogContext(job.id, job.data));
-}
-
-async function handleJobFailed(
-  deadLetterQueue: Queue,
-  job: Job<ReviewJobData> | undefined,
-  error: Error,
-): Promise<void> {
-  if (!job) {
-    logger.error("Job failed with no job reference", { error: error.message });
-    return;
-  }
-
-  if (isFinalJobFailure(job, error)) {
-    logger.error("Job permanently failed", {
-      ...reviewJobLogContext(job.id, job.data),
-      error: error.message,
-      attemptsMade: job.attemptsMade,
-    });
-    await recordFinalJobFailure(job, error);
-    await moveToDeadLetterQueue(
-      deadLetterQueue,
-      job.id,
-      job.data,
-      error.message,
-    );
-  } else {
-    logger.warn("Job attempt failed, will retry", {
-      ...reviewJobLogContext(job.id, job.data),
-      error: error.message,
-      attemptsMade: job.attemptsMade,
-      maxAttempts: job.opts.attempts,
-    });
-  }
-}
-
-function createReviewWorker(): {
-  worker: Worker<ReviewJobData>;
-  deadLetterQueue: Queue;
-} {
-  const connection = createValkeyConnectionOptions();
-  const deadLetterQueue = createDeadLetterQueue();
-
-  const worker = new Worker<ReviewJobData>(
-    REVIEW_QUEUE_NAME,
-    async (job) => {
-      await processReviewJob(job);
-    },
-    {
-      connection,
-      concurrency: CONCURRENCY,
-      lockDuration: LOCK_DURATION_MS,
-      stalledInterval: STALE_INTERVAL_MS,
-      settings: {
-        backoffStrategy: (
-          attemptsMade: number,
-          _type?: string,
-          error?: Error,
-        ) => calculateBackoffDelay(attemptsMade, error),
-      },
-    },
-  );
-
-  worker.on("completed", handleJobCompleted);
-  worker.on("failed", (job, error) =>
-    handleJobFailed(deadLetterQueue, job, error),
-  );
-  worker.on("stalled", (jobId) => logger.warn("Job stalled", { jobId }));
-  worker.on("error", (error) =>
-    logger.error("Worker error", { error: error.message }),
-  );
-
-  return { worker, deadLetterQueue };
-}
-
 async function main(): Promise<void> {
   logger.info("Starting review worker", {
-    concurrency: CONCURRENCY,
+    concurrency: REVIEW_WORKER_CONCURRENCY,
     queue: REVIEW_QUEUE_NAME,
     lockDurationMs: LOCK_DURATION_MS,
     stalledIntervalMs: STALE_INTERVAL_MS,
     model: env.LLM_MODEL_ID,
   });
 
-  const { worker, deadLetterQueue } = createReviewWorker();
+  const connection = createValkeyConnectionOptions();
+  const deadLetterQueue = new Queue(DEAD_LETTER_QUEUE_NAME, { connection });
+  const worker = createReviewWorker({
+    connection,
+    queueName: REVIEW_QUEUE_NAME,
+    deadLetterQueue,
+    lockDurationMs: LOCK_DURATION_MS,
+    stalledIntervalMs: STALE_INTERVAL_MS,
+  });
   const staleReviewSweep = startStaleReviewSweep();
 
   const shutdown = async (signal: string): Promise<void> => {

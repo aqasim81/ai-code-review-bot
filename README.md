@@ -125,6 +125,7 @@ See `.env.example` for all required variables. Key ones:
 | `pnpm validate` | Run all checks (lint + type-check + knip + tests) |
 | `pnpm test` | Run Vitest unit tests |
 | `pnpm test:db` | Run the database tests against a real Postgres |
+| `pnpm test:queue` | Run the job lifecycle tests against real Valkey and Postgres |
 | `pnpm test:coverage` | Run tests with coverage report |
 | `pnpm type-check` | TypeScript type checking |
 | `pnpm lint:fix` | Auto-fix lint and format issues |
@@ -149,11 +150,13 @@ src/
 ├── types/                  # Shared types (branded, results, errors, review, github, llm)
 └── generated/              # Prisma generated client
 worker/
-└── index.ts                # Standalone BullMQ worker process
+├── index.ts                # Standalone BullMQ worker process
+└── review-worker.ts        # Worker factory and failure handling
 tests/
 ├── unit/                   # Unit tests (review/, llm/)
 ├── integration/            # Integration tests (webhook, pipeline, queue)
 ├── db/                     # Query tests against a real Postgres
+├── queue/                  # Job lifecycle tests against real Valkey + BullMQ
 ├── e2e/                    # Playwright E2E tests
 ├── fixtures/               # Test data (diffs, LLM responses)
 └── helpers/                # Test factories and utilities
@@ -173,6 +176,10 @@ docker compose up -d postgres
 docker compose exec postgres createdb -U postgres ai_code_review_test
 DATABASE_URL=postgresql://postgres:postgres@localhost:5433/ai_code_review_test pnpm db:migrate
 pnpm test:db
+
+# Run the job lifecycle tests (also needs Valkey)
+docker compose up -d valkey
+pnpm test:queue
 
 # Run E2E tests (requires dev server running)
 npx playwright test

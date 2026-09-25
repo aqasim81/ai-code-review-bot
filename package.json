@@ -13,6 +13,7 @@
     "format": "biome format --write .",
     "test": "vitest run --project unit",
     "test:db": "vitest run --project db",
+    "test:queue": "vitest run --project queue",
     "test:watch": "vitest --project unit",
     "test:coverage": "vitest run --coverage --project unit",
     "db:migrate": "prisma migrate deploy",
