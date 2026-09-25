@@ -67,7 +67,20 @@ describe("handleInstallationCreated", () => {
     const result = await handleInstallationCreated(payload);
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error).toContain("missing account");
+    expect(result.error).toBe("INVALID_PAYLOAD");
+    expect(createInstallationWithRepositories).not.toHaveBeenCalled();
+  });
+
+  it("returns INVALID_PAYLOAD when the installation is missing", async () => {
+    const result = await handleInstallationCreated({
+      action: "created",
+      sender: { login: "test-sender" },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("INVALID_PAYLOAD");
+    expect(createInstallationWithRepositories).not.toHaveBeenCalled();
   });
 
   it("returns error when DB save fails", async () => {
@@ -134,6 +147,15 @@ describe("handleInstallationDeleted", () => {
 
     expect(result.success).toBe(true);
     expect(markInstallationDeleted).toHaveBeenCalledWith(12345);
+  });
+
+  it("returns INVALID_PAYLOAD when the installation ID is missing", async () => {
+    const result = await handleInstallationDeleted({ installation: {} });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("INVALID_PAYLOAD");
+    expect(markInstallationDeleted).not.toHaveBeenCalled();
   });
 
   it("returns error when DB update fails", async () => {
@@ -223,7 +245,29 @@ describe("handlePullRequestEvent", () => {
 
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error).toContain("Missing installation ID");
+    expect(result.error).toBe("INVALID_PAYLOAD");
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a non-reviewable action without validating the rest of the payload", async () => {
+    const result = await handlePullRequestEvent({
+      action: "labeled",
+      installation: { id: 12345 },
+    });
+
+    expect(result.success).toBe(true);
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
+  });
+
+  it("returns INVALID_PAYLOAD for a reviewable action without a pull_request", async () => {
+    const result = await handlePullRequestEvent(
+      createPrPayload({ action: "reopened", pull_request: undefined }),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("INVALID_PAYLOAD");
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
   it("returns error when queue enqueue fails", async () => {
