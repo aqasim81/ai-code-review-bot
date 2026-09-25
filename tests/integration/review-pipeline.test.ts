@@ -1224,6 +1224,57 @@ describe("executeReview — a chunk whose analysis fails", () => {
     expect(result).toEqual({ success: false, error: "REVIEW_LLM_FAILED" });
     expect(github.postPullRequestReview).not.toHaveBeenCalled();
   });
+
+  it("goes on without a chunk that keeps failing on the job's final attempt", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_INVALID_RESPONSE")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      llm,
+    );
+
+    expect(result.success && result.data.summary).toContain(
+      "Not reviewed because the analysis failed: `src/c.ts`.",
+    );
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+  });
+
+  it("stops at the first chunk when the credentials are rejected", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_AUTH_FAILED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      llm,
+    );
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_REJECTED" });
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the review as rejected when every chunk is rejected", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_BAD_REQUEST")),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_REJECTED" });
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(3);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+  });
 });
 
 describe("executeReview — superseded commits", () => {

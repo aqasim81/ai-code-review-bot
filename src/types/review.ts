@@ -153,6 +153,11 @@ export interface ReviewRequest {
   readonly commitSha: string;
   /** Queue job running this review; stable across retries of the same job. */
   readonly jobId: string;
+  /**
+   * No retry follows if this attempt fails, so a chunk whose analysis keeps
+   * failing is left out rather than failing the whole review.
+   */
+  readonly isFinalAttempt: boolean;
   readonly filePathFilter?: readonly string[];
 }
 
