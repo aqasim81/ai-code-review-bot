@@ -1,14 +1,48 @@
 import NextAuth from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import GitHub from "next-auth/providers/github";
 import { env } from "@/lib/env";
-import {
-  EMPTY_USER_ACCESS,
-  parseUserAccess,
-} from "@/lib/github/repository-access";
+import { refreshAccessState } from "@/lib/github/access-refresh";
+import { parseUserAccess } from "@/lib/github/repository-access";
+import { fetchUserRepositoryAccessCached } from "@/lib/github/user-access-cache";
 import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
 import { logger } from "@/lib/logger";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+function timestampOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Keeps the token's repository access current. A forced refresh (sign-in, or
+ * an explicit session update such as after installing the app) skips the
+ * shared cache; otherwise access is re-fetched every few minutes.
+ */
+async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
+  const now = Date.now();
+  const state = await refreshAccessState({
+    state: {
+      access: parseUserAccess(token.access),
+      fetchedAt: timestampOrZero(token.accessFetchedAt),
+      checkedAt: timestampOrZero(token.accessCheckedAt),
+    },
+    accessToken: token.accessToken,
+    forced,
+    now,
+    fetchAccess: forced
+      ? fetchUserRepositoryAccess
+      : (accessToken) => fetchUserRepositoryAccessCached(accessToken, now),
+  });
+  if (state.checkedAt === now && state.fetchedAt !== now) {
+    logger.warn("Failed to refresh user repository access", {
+      login: token.login,
+    });
+  }
+  token.access = state.access;
+  token.accessFetchedAt = state.fetchedAt;
+  token.accessCheckedAt = state.checkedAt;
+}
+
+export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   providers: [
     GitHub({
       clientId: env.GITHUB_CLIENT_ID,
@@ -20,7 +54,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     strategy: "jwt",
   },
   callbacks: {
-    async jwt({ token, account, profile }) {
+    // Never copy the `session` argument into the token: clients can send it.
+    async jwt({ token, account, profile, trigger }) {
+      const signingIn = Boolean(account && profile);
       if (account && profile) {
         token.githubId = Number(profile.id);
         token.login = typeof profile.login === "string" ? profile.login : "";
@@ -30,19 +66,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             ? profileRecord.avatar_url
             : "";
         token.accessToken = account.access_token ?? undefined;
-
-        if (account.access_token) {
-          const result = await fetchUserRepositoryAccess(account.access_token);
-          if (result.success) {
-            token.access = result.data;
-          } else {
-            logger.warn("Failed to fetch user repository access at sign-in", {
-              error: result.error,
-            });
-            token.access = EMPTY_USER_ACCESS;
-          }
-        }
       }
+      await refreshTokenAccess(token, signingIn || trigger === "update");
       return token;
     },
     async session({ session, token }) {

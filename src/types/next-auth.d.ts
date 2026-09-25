@@ -24,5 +24,7 @@ declare module "next-auth/jwt" {
     avatarUrl?: string;
     accessToken?: string;
     access?: UserAccess;
+    accessFetchedAt?: number;
+    accessCheckedAt?: number;
   }
 }
