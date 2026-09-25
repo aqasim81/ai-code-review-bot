@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildReviewPrompt } from "@/lib/llm/prompts";
 import {
@@ -10,7 +12,20 @@ import {
   createReviewChunk,
 } from "../../helpers/factories";
 
+// The system prompt as it was before categories could be disabled; with every
+// category enabled it must stay byte-for-byte the same.
+const DEFAULT_SYSTEM_PROMPT = readFileSync(
+  path.resolve(__dirname, "../../fixtures/default-system-prompt.txt"),
+  "utf-8",
+);
+
 describe("buildReviewPrompt", () => {
+  it("keeps the default system prompt unchanged", () => {
+    const result = buildReviewPrompt(createReviewChunk(), "");
+
+    expect(result.system).toBe(DEFAULT_SYSTEM_PROMPT);
+  });
+
   it("returns object with system and user string properties", () => {
     const chunk = createReviewChunk();
     const result = buildReviewPrompt(chunk, "");

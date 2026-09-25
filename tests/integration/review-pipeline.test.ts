@@ -1561,4 +1561,20 @@ describe("executeReview — repository settings", () => {
       "We use tabs.",
     );
   });
+
+  it("passes the enabled categories to the model", async () => {
+    useRepositorySettings({ enabledCategories: ["SECURITY", "BUGS"] });
+    const llm = createMockLlmService();
+
+    await executeReview(
+      createReviewRequest(),
+      githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF),
+      llm,
+    );
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ enabledCategories: ["SECURITY", "BUGS"] }),
+    );
+  });
 });
