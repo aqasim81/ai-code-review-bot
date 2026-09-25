@@ -1,7 +1,6 @@
 import type { EmitterWebhookEvent } from "@octokit/webhooks";
 import {
-  createInstallation,
-  createRepositories,
+  createInstallationWithRepositories,
   markInstallationDeleted,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
@@ -32,49 +31,32 @@ export async function handleInstallationCreated(
     sender: sender.login,
   });
 
-  const result = await createInstallation({
-    githubInstallationId: installation.id,
-    githubAccountLogin: accountLogin,
-    githubAccountType: accountType,
-  });
+  const repositories = payload.repositories ?? [];
+  const result = await createInstallationWithRepositories(
+    {
+      githubInstallationId: installation.id,
+      githubAccountLogin: accountLogin,
+      githubAccountType: accountType,
+    },
+    repositories.map((repo) => ({
+      githubRepoId: repo.id,
+      fullName: repo.full_name,
+    })),
+  );
 
   if (!result.success) {
-    logger.error("Failed to save installation", {
+    logger.error("Failed to save installation and repositories", {
       githubInstallationId: installation.id,
       error: result.error,
     });
-    return result;
+    return err(result.error);
   }
 
   logger.info("Installation saved successfully", {
     installationId: result.data.id,
     githubInstallationId: installation.id,
+    repositoryCount: result.data.repositoryCount,
   });
-
-  const repositories = payload.repositories ?? [];
-
-  if (repositories.length > 0) {
-    const repoResult = await createRepositories(
-      result.data.id,
-      repositories.map((repo) => ({
-        githubRepoId: repo.id,
-        fullName: repo.full_name,
-      })),
-    );
-
-    if (!repoResult.success) {
-      logger.error("Failed to save repositories", {
-        installationId: result.data.id,
-        error: repoResult.error,
-      });
-      return err(repoResult.error);
-    }
-
-    logger.info("Repositories saved successfully", {
-      installationId: result.data.id,
-      repositoryCount: repoResult.data.count,
-    });
-  }
 
   return ok({ installationId: result.data.id });
 }

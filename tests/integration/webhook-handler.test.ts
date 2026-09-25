@@ -4,8 +4,7 @@ vi.mock("@/lib/db/queries");
 vi.mock("@/lib/queue/producer");
 
 import {
-  createInstallation,
-  createRepositories,
+  createInstallationWithRepositories,
   markInstallationDeleted,
 } from "@/lib/db/queries";
 import {
@@ -38,24 +37,23 @@ describe("handleInstallationCreated", () => {
   }
 
   it("saves installation and repositories to DB", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce(
-      ok({ id: installationId("inst-1") }),
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 1 }),
     );
-    vi.mocked(createRepositories).mockResolvedValueOnce(ok({ count: 1 }));
 
     const result = await handleInstallationCreated(createPayload());
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.installationId).toBe("inst-1");
-    expect(createInstallation).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      {
         githubInstallationId: 12345,
         githubAccountLogin: "test-user",
         githubAccountType: "USER",
-      }),
+      },
+      [{ githubRepoId: 100, fullName: "test-user/repo-a" }],
     );
-    expect(createRepositories).toHaveBeenCalled();
   });
 
   it("handles missing account gracefully", async () => {
@@ -73,7 +71,7 @@ describe("handleInstallationCreated", () => {
   });
 
   it("returns error when DB save fails", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce(
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
       err("DB connection error"),
     );
 
@@ -82,8 +80,8 @@ describe("handleInstallationCreated", () => {
   });
 
   it("handles installation with no repositories", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce(
-      ok({ id: installationId("inst-1") }),
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 0 }),
     );
 
     const result = await handleInstallationCreated(
@@ -91,12 +89,15 @@ describe("handleInstallationCreated", () => {
     );
 
     expect(result.success).toBe(true);
-    expect(createRepositories).not.toHaveBeenCalled();
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      expect.anything(),
+      [],
+    );
   });
 
   it("detects Organization account type", async () => {
-    vi.mocked(createInstallation).mockResolvedValueOnce(
-      ok({ id: installationId("inst-1") }),
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 0 }),
     );
 
     const payload = createPayload({
@@ -109,10 +110,9 @@ describe("handleInstallationCreated", () => {
 
     await handleInstallationCreated(payload);
 
-    expect(createInstallation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        githubAccountType: "ORG",
-      }),
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      expect.objectContaining({ githubAccountType: "ORG" }),
+      [],
     );
   });
 });
