@@ -82,7 +82,7 @@ model Review {
   repository        Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   pullRequestNumber Int
   commitSha         String
-  status            ReviewStatus   @default(PENDING)
+  status            ReviewStatus   @default(PROCESSING)
   summary           String?
   issuesFound       Int            @default(0)
   processingTimeMs  Int?
