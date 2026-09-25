@@ -32,6 +32,13 @@ retryable with the old order would have allowed a retry to post the same comment
     one attempt of a job at a time. A PROCESSING review under the same job ID therefore means
     the earlier attempt died, so the retry can reclaim it at once. The 30-minute cutoff is a
     backstop for reviews claimed by a different job.
+- Every claim or create also sets a random `claimToken` (a fence). `saveReviewFindings`,
+  `markReviewCompleted` and `failReview` only write while the review is PROCESSING with that
+  token, and `isReviewClaimCurrent` is checked right before posting to GitHub. An attempt that
+  finds its token replaced returns `REVIEW_CLAIM_LOST` and stops without writing; the processor
+  records the job as completed. This matters because BullMQ does not stop a job that lost its
+  lock. A retry may reclaim a review while the earlier attempt is still running, and the fence
+  keeps the two from overwriting each other. *(Added for #23 and #25.)*
 - `failReview` deletes the review's comments and resets `issuesFound` in the same transaction.
   The findings are saved before posting, so a FAILED review would otherwise show findings that
   may never have reached the pull request.
@@ -47,9 +54,11 @@ retryable with the old order would have allowed a retry to post the same comment
   write), the review is marked FAILED and a retry posts the comments a second time.
 - A review left PROCESSING by a killed worker or a failed `failReview` is reclaimed by the next
   attempt of the same job (#23).
-- Known gap: a worker that is hung but still alive, whose lock expired, could still write to a
-  review that a later attempt has reclaimed. Guarding completion and failure updates by owner
-  would close this (#25).
+- Known gap: the claim check before posting and the post itself are not atomic. An attempt that
+  loses its claim in that short window can still post, so the pull request gets a second review.
+- Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
+  commit is recorded as completed. Nothing reclaims the review until a job arrives after the
+  30-minute cutoff.
 - `githubCommentId` on review comments is still never filled in.
 
 ## Alternatives considered
