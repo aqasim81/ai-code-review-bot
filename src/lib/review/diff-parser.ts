@@ -46,12 +46,13 @@ const HUNK_HEADER_REGEX =
 export function parseUnifiedDiff(
   rawDiff: string,
 ): Result<ParsedDiff, DiffParseError> {
-  const trimmed = rawDiff.trim();
-  if (trimmed.length === 0) {
+  if (rawDiff.trim().length === 0) {
     return err("DIFF_EMPTY");
   }
 
-  const fileBlocks = splitIntoFileBlocks(trimmed);
+  // Not trimmed: whitespace at the end of the last line is part of that line
+  // (a blank context line is a single space).
+  const fileBlocks = splitIntoFileBlocks(rawDiff);
   const files: ParsedDiffFile[] = [];
 
   for (const block of fileBlocks) {
