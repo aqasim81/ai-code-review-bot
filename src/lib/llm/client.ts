@@ -39,6 +39,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
   return {
     async analyzeReviewChunk(
       chunk: ReviewChunk,
+      customInstructions: string,
     ): Promise<Result<ReviewResult, LLMError>> {
       if (apiKey === undefined || apiKey.length === 0) {
         return err("LLM_API_KEY_MISSING");
@@ -49,7 +50,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
         sdkClient = new LlmSdk({ apiKey, maxRetries: 0 });
       }
 
-      const prompt = buildReviewPrompt(chunk);
+      const prompt = buildReviewPrompt(chunk, customInstructions);
 
       const result = await callWithRetry(
         sdkClient,

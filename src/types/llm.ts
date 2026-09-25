@@ -14,5 +14,6 @@ export type LLMError =
 export interface LLMService {
   analyzeReviewChunk(
     chunk: ReviewChunk,
+    customInstructions: string,
   ): Promise<Result<ReviewResult, LLMError>>;
 }

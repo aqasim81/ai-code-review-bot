@@ -84,7 +84,10 @@ Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \
 5. Do not repeat the same finding for the same line.
 6. Prioritize actionable feedback over nitpicks.`;
 
-export function buildReviewPrompt(chunk: ReviewChunk): ReviewPrompt {
+export function buildReviewPrompt(
+  chunk: ReviewChunk,
+  customInstructions: string,
+): ReviewPrompt {
   const userParts: string[] = [
     "Review the following code changes and report any issues as JSON.\n",
   ];
@@ -94,9 +97,23 @@ export function buildReviewPrompt(chunk: ReviewChunk): ReviewPrompt {
   }
 
   return {
-    system: SYSTEM_PROMPT,
+    system: buildSystemPrompt(customInstructions),
     user: userParts.join("\n"),
   };
+}
+
+// The repository owner's instructions refine the review; they come after the
+// rules so the output format stays fixed.
+function buildSystemPrompt(customInstructions: string): string {
+  const instructions = customInstructions.trim();
+  if (instructions.length === 0) return SYSTEM_PROMPT;
+
+  return [
+    SYSTEM_PROMPT,
+    "## Repository Instructions",
+    "The repository owner gave these instructions. Follow them unless they conflict with the output format or rules above.",
+    `\`\`\`\n${instructions}\n\`\`\``,
+  ].join("\n\n");
 }
 
 function formatFileForPrompt(file: FileReviewContext): string {

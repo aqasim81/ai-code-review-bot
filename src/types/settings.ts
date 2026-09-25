@@ -38,29 +38,55 @@ export const repositorySettingsSchema = z.object({
 
 export type RepositorySettingsInput = z.infer<typeof repositorySettingsSchema>;
 
+/**
+ * Stored settings with each missing or invalid field replaced by its default.
+ * The column is JSON, so a stored value is checked against the same schema a
+ * save uses before anything relies on it.
+ */
 export function mergeWithDefaults(
   stored: unknown,
 ): Required<RepositorySettings> {
-  if (stored === null || stored === undefined || typeof stored !== "object") {
-    return { ...DEFAULT_REPOSITORY_SETTINGS };
-  }
-
-  const raw = stored as Record<string, unknown>;
+  const raw: Record<string, unknown> =
+    stored !== null && typeof stored === "object" ? { ...stored } : {};
+  const fields = repositorySettingsSchema.shape;
 
   return {
-    enabledCategories: Array.isArray(raw.enabledCategories)
-      ? (raw.enabledCategories as CommentCategory[])
-      : [...DEFAULT_REPOSITORY_SETTINGS.enabledCategories],
-    minimumSeverity:
-      typeof raw.minimumSeverity === "string"
-        ? (raw.minimumSeverity as CommentSeverity)
-        : DEFAULT_REPOSITORY_SETTINGS.minimumSeverity,
-    excludePatterns: Array.isArray(raw.excludePatterns)
-      ? (raw.excludePatterns as string[])
-      : [...DEFAULT_REPOSITORY_SETTINGS.excludePatterns],
-    customInstructions:
-      typeof raw.customInstructions === "string"
-        ? raw.customInstructions
-        : DEFAULT_REPOSITORY_SETTINGS.customInstructions,
+    enabledCategories: validOrDefault(
+      fields.enabledCategories,
+      knownCategoriesOnly(raw.enabledCategories),
+      DEFAULT_REPOSITORY_SETTINGS.enabledCategories,
+    ),
+    minimumSeverity: validOrDefault(
+      fields.minimumSeverity,
+      raw.minimumSeverity,
+      DEFAULT_REPOSITORY_SETTINGS.minimumSeverity,
+    ),
+    excludePatterns: validOrDefault(
+      fields.excludePatterns,
+      raw.excludePatterns,
+      DEFAULT_REPOSITORY_SETTINGS.excludePatterns,
+    ),
+    customInstructions: validOrDefault(
+      fields.customInstructions,
+      raw.customInstructions,
+      DEFAULT_REPOSITORY_SETTINGS.customInstructions,
+    ),
   };
+}
+
+// A category removed from the enum stays in stored JSON; dropping it keeps the
+// owner's other choices instead of turning every category back on.
+function knownCategoriesOnly(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const category = z.enum(CommentCategory);
+  return value.filter((item) => category.safeParse(item).success);
+}
+
+function validOrDefault<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  fallback: T,
+): T {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : fallback;
 }

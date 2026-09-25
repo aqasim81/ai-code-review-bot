@@ -16,7 +16,11 @@ import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type { ReviewClaimRef } from "@/types/review";
-import type { RepositorySettingsInput } from "@/types/settings";
+import {
+  mergeWithDefaults,
+  type RepositorySettings,
+  type RepositorySettingsInput,
+} from "@/types/settings";
 import { prisma } from "./prisma-client";
 
 function databaseError(failurePrefix: string, error: unknown) {
@@ -152,13 +156,18 @@ interface RepositoryForReviewInput {
   readonly fullName: string;
 }
 
-type RepositoryForReview = { id: RepositoryId; isEnabled: boolean };
+type RepositoryForReview = {
+  id: RepositoryId;
+  isEnabled: boolean;
+  settings: Required<RepositorySettings>;
+};
 
 const REVIEW_REPOSITORY_SELECT = {
   id: true,
   isEnabled: true,
   fullName: true,
   removedAt: true,
+  settings: true,
 } as const;
 
 /**
@@ -197,6 +206,7 @@ export async function findOrCreateRepositoryForReview(
     return ok({
       id: existing.id as RepositoryId,
       isEnabled: existing.isEnabled,
+      settings: mergeWithDefaults(existing.settings),
     });
   });
 }

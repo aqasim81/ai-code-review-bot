@@ -155,7 +155,8 @@ export function SettingsForm({
           <legend className="text-base font-semibold">File Exclusions</legend>
           <p className="text-sm text-muted-foreground">
             Glob patterns for files to skip during review (e.g., *.lock,
-            dist/**)
+            dist/**). A pattern without a slash matches the file name in any
+            folder; one with a slash matches from the repository root.
           </p>
           <div className="space-y-2">
             {excludePatterns.map((pattern, index) => (
