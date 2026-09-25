@@ -160,6 +160,25 @@ describe("dashboard repository actions", () => {
     });
   });
 
+  it("shows a generic message instead of database detail when saving settings fails", async () => {
+    vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
+      repositoryWithGithubId(1),
+    );
+    vi.mocked(updateRepositorySettings).mockResolvedValue(
+      err("Failed to update repository settings: connection refused"),
+    );
+
+    const result = await saveRepositorySettingsAction(
+      REPO_ID,
+      validSettingsForm(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "Could not save the change. Please try again.",
+    });
+  });
+
   it("refuses when the scoped update matches no repository", async () => {
     vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
       repositoryWithGithubId(1),
