@@ -105,8 +105,8 @@ export function SettingsForm({
         </p>
       )}
       <fieldset disabled={!canManage} className="space-y-8">
-        <div className="space-y-4">
-          <Label className="text-base font-semibold">Review Categories</Label>
+        <fieldset className="space-y-4">
+          <legend className="text-base font-semibold">Review Categories</legend>
           <p className="text-sm text-muted-foreground">
             Select which categories of issues to check for.
           </p>
@@ -130,7 +130,7 @@ export function SettingsForm({
               </div>
             ))}
           </div>
-        </div>
+        </fieldset>
 
         <div className="space-y-2">
           <Label htmlFor="minimumSeverity" className="text-base font-semibold">
@@ -153,8 +153,8 @@ export function SettingsForm({
           </Select>
         </div>
 
-        <div className="space-y-3">
-          <Label className="text-base font-semibold">File Exclusions</Label>
+        <fieldset className="space-y-3">
+          <legend className="text-base font-semibold">File Exclusions</legend>
           <p className="text-sm text-muted-foreground">
             Glob patterns for files to skip during review (e.g., *.lock,
             dist/**)
@@ -193,7 +193,7 @@ export function SettingsForm({
               </Button>
             )}
           </div>
-        </div>
+        </fieldset>
 
         <div className="space-y-2">
           <Label
@@ -217,16 +217,14 @@ export function SettingsForm({
           />
         </div>
 
-        {state && !state.success && (
-          <p role="alert" className="text-sm text-destructive">
-            {state.error}
-          </p>
-        )}
-        {state?.success && (
-          <output className="block text-sm text-muted-foreground">
-            Settings saved.
-          </output>
-        )}
+        {/* Both regions stay mounted and are emptied while saving, so each
+            result is a change that assistive technology announces. */}
+        <p role="alert" className="text-sm text-destructive empty:hidden">
+          {!isPending && state && !state.success ? state.error : ""}
+        </p>
+        <output className="block text-sm text-muted-foreground empty:hidden">
+          {!isPending && state?.success ? "Settings saved." : ""}
+        </output>
 
         <Button type="submit" disabled={isPending}>
           {isPending ? "Saving..." : "Save Settings"}

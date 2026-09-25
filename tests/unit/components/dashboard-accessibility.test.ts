@@ -15,7 +15,7 @@ import { RepositoryToggle } from "@/components/dashboard/repository-toggle";
 import { SettingsForm } from "@/components/dashboard/settings-form";
 
 describe("dashboard accessibility", () => {
-  it("names each review switch after its repository, independent of its state", () => {
+  it("names each review switch after its repository and keeps its alert region mounted", () => {
     const html = renderToStaticMarkup(
       createElement(RepositoryToggle, {
         repositoryId: "repo-1",
@@ -26,10 +26,11 @@ describe("dashboard accessibility", () => {
     );
 
     expect(html).toContain('aria-label="Reviews for acme/app"');
+    expect(html).toMatch(/<p role="alert"[^>]*><\/p>/);
     expect(html).toContain('role="switch"');
   });
 
-  it("labels every exclude-pattern input and its remove button", () => {
+  it("keeps the save result regions mounted and labels every exclude-pattern input", () => {
     const html = renderToStaticMarkup(
       createElement(SettingsForm, {
         repositoryId: "repo-1",
@@ -43,6 +44,10 @@ describe("dashboard accessibility", () => {
       }),
     );
 
+    expect(html).toMatch(/<p role="alert"[^>]*><\/p>/);
+    expect(html).toMatch(/<output[^>]*><\/output>/);
+    expect(html).toMatch(/<legend[^>]*>Review Categories<\/legend>/);
+    expect(html).toMatch(/<legend[^>]*>File Exclusions<\/legend>/);
     expect(html).toContain('aria-label="Exclude pattern 1"');
     expect(html).toContain('aria-label="Exclude pattern 2"');
     expect(html).toContain('aria-label="Remove exclude pattern 2"');

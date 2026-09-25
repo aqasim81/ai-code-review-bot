@@ -23,8 +23,15 @@ export function RepositoryToggle({
   function handleToggle(checked: boolean) {
     setError(null);
     startTransition(async () => {
-      const result = await toggleRepositoryEnabledAction(repositoryId, checked);
-      if (!result.success) setError(result.error);
+      try {
+        const result = await toggleRepositoryEnabledAction(
+          repositoryId,
+          checked,
+        );
+        if (!result.success) setError(result.error);
+      } catch {
+        setError("Could not reach the server. Please try again.");
+      }
     });
   }
 
@@ -36,11 +43,9 @@ export function RepositoryToggle({
         disabled={isPending || !canManage}
         aria-label={`Reviews for ${repositoryName}`}
       />
-      {error && (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      )}
+      <p role="alert" className="text-xs text-destructive empty:hidden">
+        {error}
+      </p>
     </div>
   );
 }
