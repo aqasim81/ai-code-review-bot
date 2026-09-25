@@ -48,19 +48,21 @@ retryable with the old order would have allowed a retry to post the same comment
 
 - A failed save never leaves comments on the pull request, because nothing has been posted yet.
 - Retries re-run FAILED reviews, including the LLM analysis.
-- Known gap: if the post succeeds but `markReviewCompleted` then fails, the review is marked
-  FAILED and a retry posts the comments a second time. The window is one single-row update
-  after a successful network call.
-- Known gap: if GitHub accepts the review but the call then fails (a timeout or 5xx after the
-  write), the review is marked FAILED and a retry posts the comments a second time.
+- If the post succeeds but `markReviewCompleted` then fails, the retry finds the earlier post by
+  its marker and completes the review without reposting (#22).
 - A review left PROCESSING by a killed worker or a failed `failReview` is reclaimed by the next
   attempt of the same job (#23).
-- Known gap: posting to GitHub cannot be fenced. The window runs from the claim check before
-  posting until `markReviewCompleted`, including the network call. If another attempt reclaims
-  the review anywhere in that span, both attempts can post, so the pull request gets a second
-  review. For example: A posts, B reclaims before A marks the review completed, A stops with
-  `REVIEW_CLAIM_LOST`, and B posts again. Looking up the bot's existing review before posting
-  (#22) would close this.
+- Every posted review body ends with a hidden marker, `<!-- code-review-bot:review=<reviewId> -->`.
+  The review ID stays the same across retries and reclaims. Before posting, the engine lists the
+  PR's reviews (`GitHubService.findPostedReview`). If the app's bot account already posted one
+  with this marker, the engine does not post again and marks the review COMPLETED. This covers
+  a post that reached GitHub but reported failure, and an attempt that posted and was then
+  reclaimed. If the lookup fails, the review is marked FAILED rather than risking a duplicate.
+  *(Added for #22.)* When the post is skipped, the findings saved by the current attempt are
+  kept; they can differ slightly from the ones in the earlier post.
+- Known gap: two attempts that both run the lookup before either posts can still both post. This
+  needs two live attempts on one review within the same few seconds, and the claim token makes
+  that rare.
 - Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
   commit is recorded as completed. Nothing reclaims the review until a job arrives after the
   30-minute cutoff.
