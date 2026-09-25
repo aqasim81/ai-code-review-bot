@@ -16,7 +16,7 @@ export type SupportedLanguage =
 
 // --- Diff Parser output types ---
 
-export type DiffLineType = "added" | "removed" | "context";
+type DiffLineType = "added" | "removed" | "context";
 
 export interface DiffLine {
   readonly type: DiffLineType;

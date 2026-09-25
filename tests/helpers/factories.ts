@@ -11,12 +11,10 @@ import type {
   AstFileContext,
   AstImport,
   AstScope,
-  CommentMappingResult,
   DiffHunk,
   DiffLine,
   EnrichedHunk,
   FileReviewContext,
-  MappedReviewComment,
   ParsedDiff,
   ParsedDiffFile,
   ReviewChunk,
@@ -196,35 +194,12 @@ export function createReviewResult(
 
 // --- Comment Mapper types ---
 
-export function createMappedReviewComment(
-  overrides?: Partial<MappedReviewComment>,
-): MappedReviewComment {
-  return {
-    finding: createReviewFinding(),
-    path: "src/lib/example.ts",
-    line: 2,
-    side: "RIGHT",
-    formattedBody: "**Warning** | Bug Risk\n\nPotential null reference",
-    ...overrides,
-  };
-}
-
 export function createUnmappedFinding(
   overrides?: Partial<UnmappedFinding>,
 ): UnmappedFinding {
   return {
     finding: createReviewFinding(),
     reason: "Line not found in diff hunks",
-    ...overrides,
-  };
-}
-
-export function createCommentMappingResult(
-  overrides?: Partial<CommentMappingResult>,
-): CommentMappingResult {
-  return {
-    mappedComments: [createMappedReviewComment()],
-    unmappedFindings: [],
     ...overrides,
   };
 }
