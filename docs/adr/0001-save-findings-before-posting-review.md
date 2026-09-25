@@ -23,7 +23,9 @@ retryable with the old order would have allowed a retry to post the same comment
   - none → create a PROCESSING review, recording the queue job ID (`claimedByJobId`) and
     `processingStartedAt`. If another job creates it first, the insert hits the
     `(repositoryId, commitSha)` unique key; `createReviewRecord` maps Prisma's `P2002` to "already
-    exists" and the job returns `REVIEW_ALREADY_EXISTS` instead of a database error (#24);
+    exists" and the job returns `REVIEW_ALREADY_EXISTS` instead of a database error (#24). The
+    losing job does not re-check whether the winner's review has since become claimable; if the
+    winner fails in those few milliseconds, its own retry reclaims the review;
   - COMPLETED → `REVIEW_ALREADY_EXISTS`;
   - otherwise → `claimExistingReview` tries to take it over, in one transaction. The update is
     guarded so that it succeeds only when the review is FAILED; or PROCESSING under the same

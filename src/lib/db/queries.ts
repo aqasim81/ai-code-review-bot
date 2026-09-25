@@ -235,6 +235,9 @@ interface CreateReviewInput {
   claimedByJobId: string;
 }
 
+// For reviews, the only unique key an insert can hit is (repositoryId,
+// commitSha); the id is a random UUID. The pg adapter does not fill
+// `meta.target`, so the error code is the reliable signal.
 function isUniqueConstraintViolation(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
