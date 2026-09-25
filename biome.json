@@ -50,7 +50,7 @@
   },
   "overrides": [
     {
-      "includes": ["src/**", "worker/**"],
+      "includes": ["worker/**"],
       "linter": {
         "rules": {
           "style": {
@@ -62,10 +62,12 @@
                     "group": [
                       "@/lib/db/prisma-client",
                       "**/prisma-client",
-                      "@/generated/prisma/client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
                       "@prisma/client",
                       "@prisma/client/**",
-                      "@prisma/adapter-pg"
+                      "@prisma/adapter-pg",
+                      "pg"
                     ],
                     "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
                   }
@@ -81,6 +83,30 @@
       "linter": {
         "rules": {
           "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg",
+                      "pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
+                  }
+                ]
+              }
+            },
             "noProcessEnv": "error"
           }
         }
@@ -99,16 +125,28 @@
                     "group": [
                       "@/lib/db/prisma-client",
                       "**/prisma-client",
-                      "@/generated/prisma/client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
                       "@prisma/client",
                       "@prisma/client/**",
-                      "@prisma/adapter-pg"
+                      "@prisma/adapter-pg",
+                      "pg"
                     ],
                     "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
                   },
                   {
-                    "group": ["next", "next/**", "next-auth", "next-auth/**"],
+                    "group": [
+                      "next",
+                      "next/**",
+                      "@next/**",
+                      "next-auth",
+                      "next-auth/**"
+                    ],
                     "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
                   }
                 ]
               }
@@ -127,8 +165,18 @@
               "options": {
                 "patterns": [
                   {
-                    "group": ["next", "next/**", "next-auth", "next-auth/**"],
+                    "group": [
+                      "next",
+                      "next/**",
+                      "@next/**",
+                      "next-auth",
+                      "next-auth/**"
+                    ],
                     "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
                   }
                 ]
               }
