@@ -50,6 +50,20 @@ async function fetchChangedFilesForDelta(
     return null;
   }
 
+  // Three-dot compare only lists changes since the merge base. When head does
+  // not build on the reviewed commit (a force-push rewrote or reset the
+  // branch), changes can be missing from that list, so review everything.
+  if (
+    comparisonResult.data.status === "behind" ||
+    comparisonResult.data.status === "diverged"
+  ) {
+    logger.info("Head does not build on the last reviewed commit", {
+      status: comparisonResult.data.status,
+      repositoryFullName,
+    });
+    return null;
+  }
+
   const changedFiles = comparisonResult.data.files.map((f) => f.filename);
 
   if (changedFiles.length === 0) {
@@ -160,6 +174,8 @@ async function buildDeltaFilePathFilter(
     );
     return null;
   }
+  // Already reviewed at this commit; the engine will find that review.
+  if (baseResult.data === payload.commitSha) return [];
   return fetchChangedFilesForDelta(
     baseResult.data,
     payload.commitSha,

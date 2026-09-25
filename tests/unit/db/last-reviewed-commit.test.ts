@@ -32,7 +32,10 @@ describe("findLastReviewedCommitSha", () => {
           installation: { githubInstallationId: 12345 },
         },
       },
-      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+      orderBy: [
+        { completedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
       select: { commitSha: true },
     });
   });

@@ -258,6 +258,7 @@ describe("processReviewJob", () => {
   it("processes delta review job with file path filter", async () => {
     vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       ok({
+        status: "ahead",
         files: [
           { filename: "src/changed.ts", status: "modified" },
           { filename: "src/also-changed.ts", status: "added" },
@@ -315,6 +316,39 @@ describe("processReviewJob", () => {
     );
   });
 
+  it.each(["behind", "diverged"] as const)(
+    "reviews the whole pull request when head is %s the last reviewed commit",
+    async (status) => {
+      vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
+        ok({
+          status,
+          files: [{ filename: "src/changed.ts", status: "modified" }],
+        }),
+      );
+
+      await processReviewJob(createDeltaJob());
+
+      expect(executeReview).toHaveBeenCalledWith(
+        expect.not.objectContaining({ filePathFilter: expect.anything() }),
+        expect.anything(),
+        expect.anything(),
+      );
+    },
+  );
+
+  it("skips the compare when the head commit was already reviewed", async () => {
+    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(ok("abc123"));
+
+    await processReviewJob(createDeltaJob());
+
+    expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
+    expect(executeReview).toHaveBeenCalledWith(
+      expect.objectContaining({ filePathFilter: [] }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("falls back to full review when delta comparison fails", async () => {
     vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       err("GITHUB_UNKNOWN_ERROR"),
@@ -338,7 +372,7 @@ describe("processReviewJob", () => {
       status: "modified" as const,
     }));
     vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
-      ok({ files: manyFiles }),
+      ok({ status: "ahead", files: manyFiles }),
     );
 
     const job = createDeltaJob();

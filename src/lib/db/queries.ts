@@ -254,7 +254,10 @@ export async function findLastReviewedCommitSha(input: {
           installation: { githubInstallationId: input.githubInstallationId },
         },
       },
-      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+      orderBy: [
+        { completedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
       select: { commitSha: true },
     });
     return ok(review?.commitSha ?? null);

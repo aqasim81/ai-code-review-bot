@@ -389,7 +389,7 @@ function createGitHubService(
           status: (file.status ?? "modified") as CommitComparisonFileStatus,
         }));
 
-        return ok({ files });
+        return ok({ status: response.data.status, files });
       } catch (error) {
         if (isAuthError(error)) {
           clearToken();
