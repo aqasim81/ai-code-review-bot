@@ -195,6 +195,43 @@ describe("dashboard pages when a database query fails", () => {
   );
 });
 
+// At sign-in, or in the refresh right after installing the app, a GitHub
+// error leaves the session without the new access. That is not an answer
+// that the user has no installations (#118).
+describe("dashboard pages while loading the user's GitHub access has failed", () => {
+  const PENDING_SESSION = {
+    ...SESSION,
+    access: {
+      githubInstallationIds: [],
+      accessibleGithubRepoIds: [],
+      manageableGithubRepoIds: [],
+      truncated: false,
+    },
+    accessPending: true,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGetSession.mockResolvedValue(PENDING_SESSION);
+    allQueriesSucceedWithNoRows();
+    vi.mocked(findInstallationsByGitHubIds).mockResolvedValue(ok([]));
+  });
+
+  it.each([
+    ["dashboard", renderDashboard],
+    ["reviews", renderReviews],
+    ["repositories", renderRepositories],
+  ] as const)(
+    "the %s page says the access could not be loaded, not that there are no installations",
+    async (_page, render) => {
+      const html = await render();
+
+      expect(html).toContain("Could not load your GitHub installations");
+      expect(html).not.toContain("No installations found");
+    },
+  );
+});
+
 // Ids are UUIDs. A malformed one from the URL (NUL, which Postgres rejects in
 // text, or any other non-UUID) can never match, so it must not reach a query
 // and be reported as a load failure that a retry could fix.
