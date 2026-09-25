@@ -57,10 +57,10 @@ async function fetchChangedFilesForDelta(
 async function getOrCreateDbJobId(
   job: Job<ReviewJobData>,
 ): Promise<string | null> {
-  if (job.attemptsMade > 0) {
-    const existingId = job.data.dbJobId;
-    return typeof existingId === "string" ? existingId : null;
-  }
+  // Reuse the record whenever one was saved: a stalled job re-runs without
+  // BullMQ counting an attempt, so attemptsMade alone is not a reliable signal.
+  const existingId = job.data.dbJobId;
+  if (typeof existingId === "string") return existingId;
 
   const { type, payload } = job.data;
   const result = await createJobRecord({
