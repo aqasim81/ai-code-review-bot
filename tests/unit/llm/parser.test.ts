@@ -192,6 +192,31 @@ describe("parseLlmReviewResponse", () => {
     expect(result.data.map((item) => item.lineNumber)).toEqual([7]);
   });
 
+  it("removes NUL characters from text and drops findings with a NUL path or no message left", () => {
+    const finding = (filePath: string, message: string) => ({
+      filePath,
+      lineNumber: 3,
+      category: "bugs",
+      severity: "warning",
+      message,
+      suggestion: "Use\u0000 a guard",
+      confidence: 0.9,
+    });
+    const response = JSON.stringify([
+      finding("src/a.ts", "Null\u0000byte in message"),
+      finding("src/b\u0000.ts", "Path is not a real file"),
+      finding("src/c.ts", "\u0000\u0000"),
+    ]);
+
+    const result = parseLlmReviewResponse(response);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]?.message).toBe("Nullbyte in message");
+    expect(result.data[0]?.suggestion).toBe("Use a guard");
+  });
+
   it("returns valid findings alongside invalid ones (partial success)", () => {
     const result = parseLlmReviewResponse(MISSING_FIELDS);
     expect(result.success).toBe(true);

@@ -10,7 +10,7 @@ A GitHub App that automatically reviews pull requests using AST-aware analysis a
 
 - **AST-aware analysis** — Parses code structure with tree-sitter (TypeScript, Python, Go, Rust, Java, JavaScript)
 - **Inline PR comments** — Posts contextual review comments on exact diff lines with severity badges
-- **Delta reviews** — Only reviews files changed since last push (not the entire PR again)
+- **Delta reviews** — Only reviews files changed since the last reviewed commit (not the entire PR again)
 - **Background processing** — BullMQ job queue with retry logic and dead letter handling
 - **Dashboard** — OAuth-protected UI to manage repos, view review history, and configure settings
 

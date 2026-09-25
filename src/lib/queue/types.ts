@@ -9,10 +9,6 @@ export interface ReviewJobPayload {
   readonly commitSha: string;
 }
 
-export interface DeltaReviewJobPayload extends ReviewJobPayload {
-  readonly previousCommitSha: string;
-}
-
 export type ReviewJobData =
   | {
       readonly type: "review-pr";
@@ -21,6 +17,6 @@ export type ReviewJobData =
     }
   | {
       readonly type: "review-pr-delta";
-      readonly payload: DeltaReviewJobPayload;
+      readonly payload: ReviewJobPayload;
       readonly dbJobId?: string;
     };

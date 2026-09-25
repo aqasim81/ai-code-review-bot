@@ -1,9 +1,13 @@
 import type { Job } from "bullmq";
-import { createJobRecord, updateJobRecord } from "@/lib/db/queries";
+import {
+  createJobRecord,
+  findLastReviewedCommitSha,
+  updateJobRecord,
+} from "@/lib/db/queries";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
-import type { DeltaReviewJobPayload, ReviewJobData } from "@/lib/queue/types";
+import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { executeReview } from "@/lib/review/engine";
 import type { ReviewEngineError } from "@/types/errors";
@@ -21,7 +25,7 @@ const SKIPPED_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
 ]);
 
 async function fetchChangedFilesForDelta(
-  previousCommitSha: string,
+  baseCommitSha: string,
   currentCommitSha: string,
   repositoryFullName: string,
   githubService: GitHubService,
@@ -32,7 +36,7 @@ async function fetchChangedFilesForDelta(
   const comparisonResult = await githubService.compareCommits(
     parsed.owner,
     parsed.repo,
-    previousCommitSha,
+    baseCommitSha,
     currentCommitSha,
   );
 
@@ -40,8 +44,22 @@ async function fetchChangedFilesForDelta(
     logger.warn("Failed to compare commits for delta review", {
       error: comparisonResult.error,
       repositoryFullName,
-      baseSha: previousCommitSha,
+      baseSha: baseCommitSha,
       headSha: currentCommitSha,
+    });
+    return null;
+  }
+
+  // Three-dot compare only lists changes since the merge base. When head does
+  // not build on the reviewed commit (a force-push rewrote or reset the
+  // branch), changes can be missing from that list, so review everything.
+  if (
+    comparisonResult.data.status === "behind" ||
+    comparisonResult.data.status === "diverged"
+  ) {
+    logger.info("Head does not build on the last reviewed commit", {
+      status: comparisonResult.data.status,
+      repositoryFullName,
     });
     return null;
   }
@@ -125,12 +143,41 @@ async function markJobFailed(
   }
 }
 
-function buildDeltaFilePathFilter(
-  payload: DeltaReviewJobPayload,
+/**
+ * Limits a push review to files changed since the last completed review of
+ * the pull request. Without one (the earlier review failed or never ran), the
+ * whole pull request is reviewed.
+ */
+async function buildDeltaFilePathFilter(
+  payload: ReviewJobPayload,
   githubService: GitHubService,
 ): Promise<readonly string[] | null> {
+  const baseResult = await findLastReviewedCommitSha({
+    githubInstallationId: payload.installationId,
+    githubRepoId: payload.githubRepoId,
+    pullRequestNumber: payload.pullRequestNumber,
+  });
+  if (!baseResult.success) {
+    logger.warn("Failed to find the last reviewed commit, using full review", {
+      error: baseResult.error,
+      repositoryFullName: payload.repositoryFullName,
+    });
+    return null;
+  }
+  if (baseResult.data === null) {
+    logger.info(
+      "No completed review for this pull request, using full review",
+      {
+        repositoryFullName: payload.repositoryFullName,
+        pullRequest: payload.pullRequestNumber,
+      },
+    );
+    return null;
+  }
+  // Already reviewed at this commit; the engine will find that review.
+  if (baseResult.data === payload.commitSha) return [];
   return fetchChangedFilesForDelta(
-    payload.previousCommitSha,
+    baseResult.data,
     payload.commitSha,
     payload.repositoryFullName,
     githubService,

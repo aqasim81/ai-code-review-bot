@@ -35,6 +35,8 @@ interface CommitComparisonFile {
 }
 
 export interface CommitComparisonResult {
+  /** How head relates to base: only "ahead" means head builds on base. */
+  readonly status: "ahead" | "behind" | "identical" | "diverged";
   readonly files: readonly CommitComparisonFile[];
 }
 
