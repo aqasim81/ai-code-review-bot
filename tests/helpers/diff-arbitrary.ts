@@ -152,12 +152,3 @@ export const generatedDiffArbitrary: fc.Arbitrary<GeneratedDiff> = fc
       .join("\n");
     return { raw: `${raw}\n`, files };
   });
-
-/**
- * Whether the diff's last line ends in whitespace (a blank context line, or
- * an added or removed line with trailing spaces). parseUnifiedDiff trims the
- * whole diff and loses that whitespace: #108.
- */
-export function lastDiffLineEndsInWhitespace(raw: string): boolean {
-  return /\s$/.test(raw.replace(/\n$/, ""));
-}
