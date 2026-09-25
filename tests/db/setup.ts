@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, vi } from "vitest";
 import { disconnectTestDatabase, resetTestDatabase } from "./database";
 
-// The db project runs src/lib/db/queries.ts against a real Postgres. Every
-// test empties the tables, so only a database named *_test is accepted.
+// The db and queue projects run against a real Postgres (and the queue
+// project a real Valkey). Every test empties the tables, so only a database
+// named *_test is accepted.
 vi.mock("@/lib/env", () => {
   const databaseUrl =
     process.env.TEST_DATABASE_URL ??
@@ -15,6 +16,7 @@ vi.mock("@/lib/env", () => {
   return {
     env: {
       DATABASE_URL: databaseUrl,
+      VALKEY_URL: process.env.TEST_VALKEY_URL ?? "redis://localhost:6380",
       NODE_ENV: "test",
       LLM_MODEL_ID: "configured-model",
     },

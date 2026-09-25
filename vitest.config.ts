@@ -15,7 +15,7 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["tests/**/*.test.ts"],
-          exclude: ["tests/db/**"],
+          exclude: ["tests/db/**", "tests/queue/**"],
           setupFiles: ["./tests/setup.ts"],
         },
       },
@@ -28,6 +28,18 @@ export default defineConfig({
           include: ["tests/db/**/*.test.ts"],
           setupFiles: ["./tests/db/setup.ts"],
           fileParallelism: false,
+        },
+      },
+      // Runs review jobs through a real BullMQ worker on Valkey, with job
+      // records in Postgres (`pnpm test:queue`).
+      {
+        extends: true,
+        test: {
+          name: "queue",
+          include: ["tests/queue/**/*.test.ts"],
+          setupFiles: ["./tests/db/setup.ts"],
+          fileParallelism: false,
+          testTimeout: 30_000,
         },
       },
     ],
