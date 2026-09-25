@@ -116,7 +116,7 @@ export function createGitHubServiceFromEnv(
   );
 }
 
-export function createGitHubService(
+function createGitHubService(
   credentials: GitHubAppCredentials,
   installationId: number,
 ): GitHubService {

@@ -15,7 +15,7 @@ export interface RepositorySettings {
   readonly customInstructions?: string;
 }
 
-export const DEFAULT_REPOSITORY_SETTINGS: Required<RepositorySettings> = {
+const DEFAULT_REPOSITORY_SETTINGS: Required<RepositorySettings> = {
   enabledCategories: [
     "SECURITY",
     "BUGS",
