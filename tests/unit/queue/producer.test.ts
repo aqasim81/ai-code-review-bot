@@ -1,10 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const queueAdd = vi.hoisted(() => vi.fn());
 const queueGetJob = vi.hoisted(() => vi.fn());
+// Kept across vi.clearAllMocks: the producer builds its Queue once.
+const createdQueueOptions = vi.hoisted((): unknown[] => []);
 
 vi.mock("bullmq", () => ({
-  Queue: vi.fn(function MockQueue() {
+  Queue: vi.fn(function MockQueue(_name: string, options: unknown) {
+    createdQueueOptions.push(options);
     return { add: queueAdd, getJob: queueGetJob };
   }),
 }));
@@ -26,6 +29,8 @@ const PAYLOAD = {
   commitSha: COMMIT_SHA,
 };
 const FULL_JOB_ID = `review-octo/repo-42-${COMMIT_SHA}-full`;
+// GitHub gives up on a webhook delivery that has not been answered in 10 s.
+const GITHUB_DELIVERY_TIMEOUT_MS = 10_000;
 
 function existingJob(failed: boolean) {
   return {
@@ -119,5 +124,53 @@ describe("review job producer", () => {
     const result = await enqueueReviewJob(PAYLOAD);
 
     expect(result).toEqual({ success: false, error: "QUEUE_ENQUEUE_FAILED" });
+  });
+
+  describe("when Valkey does not answer", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fails the enqueue before GitHub times out the delivery", async () => {
+      vi.useFakeTimers();
+      queueGetJob.mockReturnValueOnce(new Promise(() => {}));
+
+      let settled: unknown;
+      void enqueueReviewJob(PAYLOAD).then((result) => {
+        settled = result;
+      });
+      await vi.advanceTimersByTimeAsync(GITHUB_DELIVERY_TIMEOUT_MS);
+
+      expect(settled).toEqual({
+        success: false,
+        error: "QUEUE_ENQUEUE_FAILED",
+      });
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it("fails the enqueue when adding the job never settles", async () => {
+      vi.useFakeTimers();
+      queueAdd.mockReturnValueOnce(new Promise(() => {}));
+
+      let settled: unknown;
+      void enqueueDeltaReviewJob(PAYLOAD).then((result) => {
+        settled = result;
+      });
+      await vi.advanceTimersByTimeAsync(GITHUB_DELIVERY_TIMEOUT_MS);
+
+      expect(settled).toEqual({
+        success: false,
+        error: "QUEUE_ENQUEUE_FAILED",
+      });
+    });
+
+    it("rejects commands while disconnected instead of queueing them", async () => {
+      await enqueueReviewJob(PAYLOAD);
+
+      expect(createdQueueOptions).toHaveLength(1);
+      expect(createdQueueOptions[0]).toMatchObject({
+        connection: { enableOfflineQueue: false },
+      });
+    });
   });
 });
