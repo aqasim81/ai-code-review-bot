@@ -10,6 +10,17 @@ import { logger } from "@/lib/logger";
 
 const webhooks = new Webhooks({ secret: env.GITHUB_WEBHOOK_SECRET });
 
+function parseWebhookPayload(
+  rawBody: string,
+): ReturnType<typeof JSON.parse> | null {
+  try {
+    const parsed = JSON.parse(rawBody);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   const signature = request.headers.get("x-hub-signature-256");
   const eventName = request.headers.get("x-github-event");
@@ -41,7 +52,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const payload = JSON.parse(rawBody);
+  const payload = parseWebhookPayload(rawBody);
+  if (payload === null) {
+    logger.warn("Webhook payload is not a valid JSON object", {
+      deliveryId,
+      eventName,
+    });
+    return NextResponse.json(
+      { error: "Invalid JSON payload" },
+      { status: 400 },
+    );
+  }
 
   logger.info("Webhook received", {
     deliveryId,
@@ -86,10 +107,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       });
     }
 
-    if (
-      eventName === "pull_request" &&
-      (payload.action === "opened" || payload.action === "synchronize")
-    ) {
+    if (eventName === "pull_request") {
       const result = await handlePullRequestEvent(payload);
       if (!result.success) {
         logger.error("Pull request handler failed", {
