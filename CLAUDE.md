@@ -123,6 +123,7 @@ Workflow rules: `.claude/rules/ai-native-workflow.md` (local). Review policy: `R
 
 ## Known mistakes to avoid
 (When the same mistake happens twice, add the correction here.)
+Bug issues carry a `kind: …` label matching these entries (lifecycle, error-classification, postgres-values, model-output, stale-state); the audit by kind is in `plans/changes/0090-audit-by-kind.md` (#90).
 
 - **Text Postgres rejects.** Text from outside (model output, webhook payloads, user input) can contain NUL (`\u0000`), which text and jsonb columns reject, failing the whole write. Strip or reject NUL before storing it (#67, #75).
 - **Values outside a column's range.** Numbers from the model (line numbers, confidence) are checked against the column's range before saving; one bad value fails the whole review's save (#55).
