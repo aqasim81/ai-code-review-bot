@@ -111,3 +111,10 @@ Workflow rules: `.claude/rules/ai-native-workflow.md` (local). Review policy: `R
 
 ## Known mistakes to avoid
 (When the same mistake happens twice, add the correction here.)
+
+- **Text Postgres rejects.** Text from outside (model output, webhook payloads, user input) can contain NUL (`\u0000`), which text and jsonb columns reject, failing the whole write. Strip or reject NUL before storing it (#67, #75).
+- **Values outside a column's range.** Numbers from the model (line numbers, confidence) are checked against the column's range before saving; one bad value fails the whole review's save (#55).
+- **Records left unfinished.** Every Job and Review status write is guarded by the current status. Every exit path (a returned error, a throw, a stall, an unrecoverable failure, a crash between two writes) leaves a final status (#13, #23, #30, #53, #66).
+- **Errors treated alike.** Every external call (GitHub, the model, the queue) classifies its errors as retryable, rate-limited or permanent. A retry must be able to help (#14, #22, #54).
+- **Old and new line numbers.** Diff line numbers are either old-file or new-file; never mix them in one format or one lookup (#50, #64).
+- **Mocks confirm assumptions.** A test that mocks Postgres, BullMQ, GitHub or the model can't find these bugs. When a fix depends on how the real service behaves (what it rejects, how it fails), check the service's source or docs and cite it in the PR.
