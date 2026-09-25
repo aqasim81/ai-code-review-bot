@@ -24,6 +24,7 @@ async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
       access: parseUserAccess(token.access),
       fetchedAt: timestampOrZero(token.accessFetchedAt),
       checkedAt: timestampOrZero(token.accessCheckedAt),
+      pending: token.accessPending === true,
     },
     accessToken: token.accessToken,
     forced,
@@ -34,12 +35,14 @@ async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
   if (outcome.kind === "failed") {
     logger.warn("Failed to refresh user repository access", {
       login: token.login,
-      error: outcome.error,
+      kind: outcome.error.kind,
+      error: outcome.error.message,
     });
   }
   token.access = state.access;
   token.accessFetchedAt = state.fetchedAt;
   token.accessCheckedAt = state.checkedAt;
+  token.accessPending = state.pending;
 }
 
 export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
@@ -77,6 +80,7 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
       session.user.avatarUrl =
         typeof token.avatarUrl === "string" ? token.avatarUrl : "";
       session.access = parseUserAccess(token.access);
+      session.accessPending = token.accessPending === true;
       return session;
     },
   },

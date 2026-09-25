@@ -1,9 +1,12 @@
 import { EMPTY_USER_ACCESS } from "@/lib/github/repository-access";
-import type { UserAccess } from "@/types/access";
+import type { UserAccess, UserAccessFetchError } from "@/types/access";
 import type { Result } from "@/types/results";
 
 export const ACCESS_REFRESH_INTERVAL_MS = 5 * 60_000;
 const ACCESS_RETRY_INTERVAL_MS = 60_000;
+// A refresh the user is waiting for is retried within seconds; the shared
+// fetcher keeps GitHub from being asked more often than a retry can help.
+const PENDING_RETRY_INTERVAL_MS = 5_000;
 
 export interface AccessState {
   readonly access: UserAccess;
@@ -11,6 +14,11 @@ export interface AccessState {
   readonly fetchedAt: number;
   /** When a refresh was last attempted (ms epoch, 0 = never). */
   readonly checkedAt: number;
+  /**
+   * A refresh the user asked for (sign-in, or after installing the app) has
+   * not succeeded yet, so the access in use may be missing what they expect.
+   */
+  readonly pending: boolean;
 }
 
 export interface FetchedAccess {
@@ -27,16 +35,17 @@ interface RefreshAccessInput {
   readonly now: number;
   readonly fetchAccess: (
     accessToken: string,
-  ) => Promise<Result<FetchedAccess, string>>;
+  ) => Promise<Result<FetchedAccess, UserAccessFetchError>>;
 }
 
 type RefreshOutcome =
   | { readonly kind: "unchanged" }
   | { readonly kind: "refreshed" }
-  | { readonly kind: "failed"; readonly error: string };
+  | { readonly kind: "failed"; readonly error: UserAccessFetchError };
 
 function isRefreshDue(state: AccessState, forced: boolean, now: number) {
   if (forced) return true;
+  if (state.pending) return now - state.checkedAt >= PENDING_RETRY_INTERVAL_MS;
   return (
     now - state.fetchedAt >= ACCESS_REFRESH_INTERVAL_MS &&
     now - state.checkedAt >= ACCESS_RETRY_INTERVAL_MS
@@ -46,7 +55,9 @@ function isRefreshDue(state: AccessState, forced: boolean, now: number) {
 /**
  * Re-fetches the user's access when it is due. A failed refresh keeps the
  * current access for at most one more interval and then drops it to nothing,
- * so access only ever grows through a successful fetch. The state comes from
+ * so access only ever grows through a successful fetch. A requested refresh
+ * that fails stays pending, and is retried within seconds, until it succeeds
+ * or fails in a way a retry cannot fix. The state comes from
  * the client's cookie, so limits on how often GitHub is called belong to the
  * fetcher, not to this state.
  */
@@ -68,12 +79,17 @@ export async function refreshAccessState(
         access: result.data.access,
         fetchedAt: result.data.fetchedAt,
         checkedAt: now,
+        pending: false,
       },
       outcome: { kind: "refreshed" },
     };
   }
   return {
-    state: { ...current, checkedAt: now },
+    state: {
+      ...current,
+      checkedAt: now,
+      pending: result.error.kind !== "permanent" && (state.pending || forced),
+    },
     outcome: { kind: "failed", error: result.error },
   };
 }

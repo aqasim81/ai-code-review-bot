@@ -43,6 +43,17 @@ export default async function DashboardPage() {
   }
   const { installations, stats, repos } = loaded;
 
+  // A failed GitHub lookup at sign-in or after installing is being retried;
+  // it is not an answer that the user has no installations.
+  if (installations.length === 0 && session.accessPending) {
+    return (
+      <div>
+        <PageHeader title="Dashboard" />
+        <LoadFailedCard what="your GitHub installations" />
+      </div>
+    );
+  }
+
   if (installations.length === 0) {
     return (
       <div>
