@@ -1,4 +1,4 @@
-import type { Job } from "bullmq";
+import { type Job, UnrecoverableError } from "bullmq";
 import {
   createJobRecord,
   findLastReviewedCommitSha,
@@ -23,6 +23,17 @@ const SKIPPED_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
   "REVIEW_CLAIM_LOST",
   "REVIEW_REPOSITORY_UNAVAILABLE",
 ]);
+
+// Failures no retry can fix: GitHub or the model refused the request itself.
+const UNRECOVERABLE_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
+  "REVIEW_DIFF_UNAVAILABLE",
+  "REVIEW_LLM_REJECTED",
+  "REVIEW_POST_REJECTED",
+]);
+
+function describeReviewFailure(error: ReviewEngineError): string {
+  return `Review failed: ${error}`;
+}
 
 async function fetchChangedFilesForDelta(
   baseCommitSha: string,
@@ -284,11 +295,37 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     pullRequest: payload.pullRequestNumber,
   });
   await markJobFailed(dbJobId, result.error, job.attemptsMade + 1);
-  throw new Error(`Review failed: ${result.error}`);
+  const message = describeReviewFailure(result.error);
+  if (UNRECOVERABLE_REVIEW_ERRORS.has(result.error)) {
+    throw new UnrecoverableError(message);
+  }
+  throw new Error(message);
 }
 
-export function calculateBackoffDelay(attemptsMade: number): number {
+// GitHub's primary rate limit resets hourly; two 30-minute waits between the
+// three attempts span a full window.
+const GITHUB_RATE_LIMIT_RETRY_DELAY_MS = 30 * 60_000;
+
+export function calculateBackoffDelay(
+  attemptsMade: number,
+  error?: Error,
+): number {
+  if (error?.message === describeReviewFailure("REVIEW_GITHUB_RATE_LIMITED")) {
+    return GITHUB_RATE_LIMIT_RETRY_DELAY_MS;
+  }
   const BASE_DELAY_MS = 10_000;
   const MULTIPLIER = 3;
   return BASE_DELAY_MS * MULTIPLIER ** (attemptsMade - 1);
+}
+
+/**
+ * A failed job gets no further attempts when it used its last one or threw
+ * UnrecoverableError, which BullMQ fails without retrying.
+ */
+export function isFinalJobFailure(
+  job: { readonly attemptsMade: number; readonly opts: { attempts?: number } },
+  error: Error,
+): boolean {
+  if (error instanceof UnrecoverableError) return true;
+  return job.attemptsMade >= (job.opts.attempts ?? 1);
 }

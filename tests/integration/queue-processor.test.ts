@@ -5,7 +5,7 @@ vi.mock("@/lib/github/api");
 vi.mock("@/lib/llm/client");
 vi.mock("@/lib/review/engine");
 
-import type { Job } from "bullmq";
+import { type Job, UnrecoverableError } from "bullmq";
 import {
   createJobRecord,
   findLastReviewedCommitSha,
@@ -13,7 +13,11 @@ import {
 } from "@/lib/db/queries";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
-import { calculateBackoffDelay, processReviewJob } from "@/lib/queue/processor";
+import {
+  calculateBackoffDelay,
+  isFinalJobFailure,
+  processReviewJob,
+} from "@/lib/queue/processor";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { executeReview } from "@/lib/review/engine";
 import { err, ok } from "@/types/results";
@@ -255,6 +259,36 @@ describe("processReviewJob", () => {
     });
   });
 
+  it.each([
+    "REVIEW_DIFF_UNAVAILABLE",
+    "REVIEW_LLM_REJECTED",
+    "REVIEW_POST_REJECTED",
+  ] as const)("fails the job without retrying on %s", async (code) => {
+    vi.mocked(executeReview).mockResolvedValue(err(code));
+
+    const failure = processReviewJob(createMockJob());
+
+    await expect(failure).rejects.toBeInstanceOf(UnrecoverableError);
+    await expect(failure).rejects.toThrow(`Review failed: ${code}`);
+    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "FAILED", {
+      lastError: code,
+      attempts: 1,
+    });
+  });
+
+  it.each([
+    "REVIEW_GITHUB_RATE_LIMITED",
+    "REVIEW_LLM_FAILED",
+    "REVIEW_DIFF_FETCH_FAILED",
+  ] as const)("leaves %s retryable", async (code) => {
+    vi.mocked(executeReview).mockResolvedValue(err(code));
+
+    const failure = processReviewJob(createMockJob());
+
+    await expect(failure).rejects.toThrow(`Review failed: ${code}`);
+    await expect(failure).rejects.not.toBeInstanceOf(UnrecoverableError);
+  });
+
   it("processes delta review job with file path filter", async () => {
     vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       ok({
@@ -420,5 +454,39 @@ describe("calculateBackoffDelay", () => {
 
     expect(delay2 / delay1).toBe(3);
     expect(delay3 / delay2).toBe(3);
+  });
+});
+
+describe("calculateBackoffDelay for a GitHub rate limit", () => {
+  it("waits 30 minutes before each retry so the attempts span the hourly reset", () => {
+    const rateLimited = new Error("Review failed: REVIEW_GITHUB_RATE_LIMITED");
+
+    expect(calculateBackoffDelay(1, rateLimited)).toBe(30 * 60_000);
+    expect(calculateBackoffDelay(2, rateLimited)).toBe(30 * 60_000);
+  });
+
+  it("keeps the short backoff for other failures", () => {
+    const failed = new Error("Review failed: REVIEW_LLM_FAILED");
+
+    expect(calculateBackoffDelay(1, failed)).toBe(10_000);
+  });
+});
+
+describe("isFinalJobFailure", () => {
+  const job = (attemptsMade: number) => ({
+    attemptsMade,
+    opts: { attempts: 3 },
+  });
+
+  it("is final after the last attempt", () => {
+    expect(isFinalJobFailure(job(3), new Error("boom"))).toBe(true);
+  });
+
+  it("is final when the failure cannot be retried, whatever the attempt", () => {
+    expect(isFinalJobFailure(job(1), new UnrecoverableError("no"))).toBe(true);
+  });
+
+  it("is not final while attempts remain", () => {
+    expect(isFinalJobFailure(job(1), new Error("boom"))).toBe(false);
   });
 });
