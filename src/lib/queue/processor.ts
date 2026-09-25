@@ -7,6 +7,7 @@ import {
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
+import { reviewJobLogContext } from "@/lib/queue/producer";
 import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { exponentialDelayMs } from "@/lib/retry";
@@ -237,17 +238,14 @@ async function buildReviewRequest(
 }
 
 export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
-  const { type, payload } = job.data;
+  const { payload } = job.data;
   const jobId = job.id;
   if (jobId === undefined) {
     throw new Error("Review job has no ID; cannot claim a review for it");
   }
 
   logger.info("Processing review job", {
-    jobId: job.id,
-    type,
-    repository: payload.repositoryFullName,
-    pullRequest: payload.pullRequestNumber,
+    ...reviewJobLogContext(job.id, job.data),
     attempt: job.attemptsMade + 1,
   });
 
@@ -290,10 +288,8 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
   }
 
   logger.error("Review job failed", {
-    jobId: job.id,
+    ...reviewJobLogContext(job.id, job.data),
     error: result.error,
-    repository: payload.repositoryFullName,
-    pullRequest: payload.pullRequestNumber,
   });
   await markJobFailed(dbJobId, result.error, job.attemptsMade + 1);
   const message = `Review failed: ${result.error}`;

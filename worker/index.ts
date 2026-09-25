@@ -1,4 +1,4 @@
-import { Queue, Worker } from "bullmq";
+import { type Job, Queue, Worker } from "bullmq";
 import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
@@ -7,6 +7,7 @@ import {
   isFinalJobFailure,
   processReviewJob,
 } from "@/lib/queue/processor";
+import { reviewJobLogContext } from "@/lib/queue/producer";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { DEAD_LETTER_QUEUE_NAME, REVIEW_QUEUE_NAME } from "@/lib/queue/types";
 import { expireStaleReviews } from "@/lib/review/stale-reviews";
@@ -60,9 +61,7 @@ async function moveToDeadLetterQueue(
     });
 
     logger.error("Job moved to dead letter queue", {
-      jobId,
-      repository: jobData.payload.repositoryFullName,
-      pullRequest: jobData.payload.pullRequestNumber,
+      ...reviewJobLogContext(jobId, jobData),
       error: errorMessage,
     });
   } catch (dlqError) {
@@ -73,30 +72,13 @@ async function moveToDeadLetterQueue(
   }
 }
 
-function handleJobCompleted(job: {
-  id?: string;
-  name: string;
-  data: ReviewJobData;
-}): void {
-  logger.info("Job completed", {
-    jobId: job.id,
-    name: job.name,
-    repository: job.data.payload.repositoryFullName,
-    pullRequest: job.data.payload.pullRequestNumber,
-  });
+function handleJobCompleted(job: Job<ReviewJobData>): void {
+  logger.info("Job completed", reviewJobLogContext(job.id, job.data));
 }
 
 async function handleJobFailed(
   deadLetterQueue: Queue,
-  job:
-    | {
-        id?: string;
-        name: string;
-        data: ReviewJobData;
-        attemptsMade: number;
-        opts: { attempts?: number };
-      }
-    | undefined,
+  job: Job<ReviewJobData> | undefined,
   error: Error,
 ): Promise<void> {
   if (!job) {
@@ -106,10 +88,7 @@ async function handleJobFailed(
 
   if (isFinalJobFailure(job, error)) {
     logger.error("Job permanently failed", {
-      jobId: job.id,
-      name: job.name,
-      repository: job.data.payload.repositoryFullName,
-      pullRequest: job.data.payload.pullRequestNumber,
+      ...reviewJobLogContext(job.id, job.data),
       error: error.message,
       attemptsMade: job.attemptsMade,
     });
@@ -121,8 +100,7 @@ async function handleJobFailed(
     );
   } else {
     logger.warn("Job attempt failed, will retry", {
-      jobId: job.id,
-      repository: job.data.payload.repositoryFullName,
+      ...reviewJobLogContext(job.id, job.data),
       error: error.message,
       attemptsMade: job.attemptsMade,
       maxAttempts: job.opts.attempts,

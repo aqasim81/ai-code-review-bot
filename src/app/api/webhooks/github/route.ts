@@ -12,6 +12,7 @@ import {
 import { logger } from "@/lib/logger";
 import type { WebhookHandlerError } from "@/types/errors";
 import type { Result } from "@/types/results";
+import { ok } from "@/types/results";
 
 const webhooks = new Webhooks({ secret: env.GITHUB_WEBHOOK_SECRET });
 
@@ -50,35 +51,22 @@ type EventHandler = (
   payload: Record<string, unknown>,
 ) => Promise<Result<Record<string, unknown>, WebhookHandlerError>>;
 
-async function acknowledged(
-  pending: Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>>,
-): Promise<Result<Record<string, unknown>, WebhookHandlerError>> {
-  const result = await pending;
-  return result.success
-    ? { success: true, data: { acknowledged: result.data.acknowledged } }
-    : result;
-}
-
 // Keyed by "event.action", or by event alone when every action goes to one handler.
 const EVENT_HANDLERS: Readonly<Record<string, EventHandler>> = {
-  "installation.created": async (payload) => {
-    const result = await handleInstallationCreated(payload);
+  "installation.created": handleInstallationCreated,
+  "installation.deleted": handleInstallationDeleted,
+  "installation.suspend": (payload) =>
+    handleInstallationSuspension(payload, true),
+  "installation.unsuspend": (payload) =>
+    handleInstallationSuspension(payload, false),
+  installation_repositories: handleInstallationRepositoriesChanged,
+  // The queue job ID stays internal; GitHub only needs the acknowledgement.
+  pull_request: async (payload) => {
+    const result = await handlePullRequestEvent(payload);
     return result.success
-      ? {
-          success: true,
-          data: { installationId: result.data.installationId },
-        }
+      ? ok({ acknowledged: result.data.acknowledged })
       : result;
   },
-  "installation.deleted": (payload) =>
-    acknowledged(handleInstallationDeleted(payload)),
-  "installation.suspend": (payload) =>
-    acknowledged(handleInstallationSuspension(payload, true)),
-  "installation.unsuspend": (payload) =>
-    acknowledged(handleInstallationSuspension(payload, false)),
-  installation_repositories: (payload) =>
-    acknowledged(handleInstallationRepositoriesChanged(payload)),
-  pull_request: (payload) => acknowledged(handlePullRequestEvent(payload)),
 };
 
 function findEventHandler(

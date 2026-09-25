@@ -63,17 +63,26 @@ async function findLiveJobWithSameId(
   return null;
 }
 
+/** The fields every log line about a review job carries. */
+export function reviewJobLogContext(
+  jobId: string | undefined,
+  jobData: ReviewJobData,
+): Record<string, unknown> {
+  return {
+    jobId,
+    type: jobData.type,
+    repository: jobData.payload.repositoryFullName,
+    pullRequest: jobData.payload.pullRequestNumber,
+  };
+}
+
 async function enqueueJob(
   jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
-  const { payload } = jobData;
   const jobId = buildDeterministicJobId(jobData);
   const logContext = {
-    jobId,
-    type: jobData.type,
-    repository: payload.repositoryFullName,
-    pullRequest: payload.pullRequestNumber,
-    commitSha: payload.commitSha,
+    ...reviewJobLogContext(jobId, jobData),
+    commitSha: jobData.payload.commitSha,
   };
 
   try {
