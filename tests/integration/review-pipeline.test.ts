@@ -1263,6 +1263,26 @@ describe("executeReview — a chunk whose analysis fails", () => {
     expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
   });
 
+  it("says which files' review may be incomplete when a reply was cut off", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(ok({ ...createReviewResult(), truncated: true }))
+        .mockResolvedValueOnce(ok(createReviewResult())),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    const body = vi.mocked(github.postPullRequestReview).mock.calls[0]?.[3]
+      .body;
+    const note =
+      "The review of these files may be incomplete because the analysis hit its output limit: `src/b.ts`.";
+    expect(body).toContain(note);
+    expect(result.success && result.data.summary).toContain(note);
+  });
+
   it("reports the review as rejected when every chunk is rejected", async () => {
     const github = githubWithThreeChunks();
     const llm = createMockLlmService({
