@@ -59,12 +59,12 @@ describe("review job producer", () => {
     });
   });
 
-  it("uses the same job ID for a redelivery of the same event", async () => {
+  it("builds the same job ID for a redelivery of the same event", async () => {
     await enqueueReviewJob(PAYLOAD);
     await enqueueReviewJob(PAYLOAD);
 
-    expect(addedJobId(0)).toBe(FULL_JOB_ID);
-    expect(addedJobId(1)).toBe(FULL_JOB_ID);
+    expect(queueGetJob).toHaveBeenNthCalledWith(1, FULL_JOB_ID);
+    expect(queueGetJob).toHaveBeenNthCalledWith(2, FULL_JOB_ID);
   });
 
   it("removes a failed job with the same ID before enqueueing a re-trigger", async () => {
@@ -82,15 +82,15 @@ describe("review job producer", () => {
     expect(addedJobId(0)).toBe(FULL_JOB_ID);
   });
 
-  it("keeps a job with the same ID that has not failed, so the redelivery is deduped", async () => {
+  it("skips a redelivery while a job with the same ID has not failed", async () => {
     const liveJob = existingJob(false);
     queueGetJob.mockResolvedValueOnce(liveJob);
 
     const result = await enqueueReviewJob(PAYLOAD);
 
-    expect(result.success).toBe(true);
+    expect(result).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
     expect(liveJob.remove).not.toHaveBeenCalled();
-    expect(addedJobId(0)).toBe(FULL_JOB_ID);
+    expect(queueAdd).not.toHaveBeenCalled();
   });
 
   it("returns QUEUE_ENQUEUE_FAILED when looking up the existing job fails", async () => {

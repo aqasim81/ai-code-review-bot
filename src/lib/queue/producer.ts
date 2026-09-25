@@ -1,4 +1,4 @@
-import { Queue } from "bullmq";
+import { type Job, Queue } from "bullmq";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import type {
@@ -46,21 +46,24 @@ function buildDeterministicJobId(jobData: ReviewJobData): string {
 
 /**
  * BullMQ ignores `add()` while a job with the same ID is kept, which would
- * swallow a reopen or redelivery that should reclaim a FAILED review. Only a
- * job in the failed set is removed; a waiting, active, delayed or completed
- * job is kept so redeliveries of the same event are still deduped.
+ * swallow a reopen or redelivery that should reclaim a FAILED review. A job in
+ * the failed set is removed so the new one can be added. A waiting, active,
+ * delayed or completed job is kept and returned, so the caller can skip the
+ * redelivery and say so in the logs.
  */
-async function removeFailedJobWithSameId(
+async function findLiveJobWithSameId(
   queue: Queue,
   jobId: string,
-): Promise<void> {
+): Promise<Job | null> {
   const existingJob = await queue.getJob(jobId);
-  if (!existingJob || !(await existingJob.isFailed())) return;
+  if (!existingJob) return null;
+  if (!(await existingJob.isFailed())) return existingJob;
 
   await existingJob.remove();
   logger.info("Removed failed review job so it can be re-triggered", {
     jobId,
   });
+  return null;
 }
 
 async function enqueueJob(
@@ -68,26 +71,28 @@ async function enqueueJob(
 ): Promise<Result<{ jobId: string }, QueueError>> {
   const { payload } = jobData;
   const jobId = buildDeterministicJobId(jobData);
+  const logContext = {
+    jobId,
+    type: jobData.type,
+    repository: payload.repositoryFullName,
+    pullRequest: payload.pullRequestNumber,
+    commitSha: payload.commitSha,
+  };
 
   try {
     const queue = getReviewQueue();
-    await removeFailedJobWithSameId(queue, jobId);
+    if (await findLiveJobWithSameId(queue, jobId)) {
+      logger.info("Review job already queued or done, skipping", logContext);
+      return ok({ jobId });
+    }
+
     const job = await queue.add(jobData.type, jobData, { jobId });
-
-    logger.info("Review job enqueued", {
-      jobId: job.id,
-      type: jobData.type,
-      repository: payload.repositoryFullName,
-      pullRequest: payload.pullRequestNumber,
-      commitSha: payload.commitSha,
-    });
-
+    logger.info("Review job enqueued", logContext);
     return ok({ jobId: job.id ?? jobId });
   } catch (error) {
     logger.error("Failed to enqueue review job", {
-      type: jobData.type,
+      ...logContext,
       error: error instanceof Error ? error.message : String(error),
-      repository: payload.repositoryFullName,
     });
     return err("QUEUE_ENQUEUE_FAILED");
   }

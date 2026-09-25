@@ -86,9 +86,11 @@ retryable with the old order would have allowed a retry to post the same comment
 - BullMQ ignores `add()` while a job with the same ID is kept (the last 100 completed and 500
   failed jobs). Before enqueueing, the producer removes a job with the same ID if it is in the
   failed set, so a reopen or redelivery can reclaim a FAILED review. A waiting, active, delayed
-  or completed job is kept, so redeliveries of the same event are still deduped and retries of
-  one job keep their ID. If two re-triggers race, the loser may get an enqueue error; the
-  winner's job runs. *(Added for #39.)*
+  or completed job is kept and the redelivery is skipped with a log line, so redeliveries of
+  the same event are still deduped and retries of one job keep their ID. Two re-triggers that
+  race can both see the failed job: the second `remove()` may then delete the first one's new
+  job (if not yet running) and add its own, or fail with an enqueue error (if it is running).
+  Either way one job runs. *(Added for #39.)*
 - Known gap: a review can be FAILED while its job is completed, when the sweep expired it and
   the running attempt then stopped with `REVIEW_CLAIM_LOST`. A re-trigger of the same job type
   is then deduped until the job leaves the completed set; a trigger of the other type (a reopen
