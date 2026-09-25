@@ -1,9 +1,11 @@
 import {
-  completeReviewWithComments,
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
   findRepositoryByFullName,
+  markReviewCompleted,
+  resetFailedReviewForRetry,
+  saveReviewFindings,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
@@ -16,7 +18,7 @@ import { buildReviewContext } from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
 import type { RepositoryId, ReviewId } from "@/types/branded";
 import type { ReviewEngineError } from "@/types/errors";
-import type { GitHubService } from "@/types/github";
+import type { GitHubService, PullRequestReviewPayload } from "@/types/github";
 import type { LLMService } from "@/types/llm";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
@@ -54,10 +56,9 @@ function parseRepositoryFullNameAsResult(
   return ok(parsed);
 }
 
-async function lookupRepositoryAndCheckIdempotency(
+async function lookupRepository(
   repositoryFullName: string,
-  commitSha: string,
-): Promise<Result<{ repositoryId: RepositoryId }, ReviewEngineError>> {
+): Promise<Result<RepositoryId, ReviewEngineError>> {
   const repoResult = await findRepositoryByFullName(repositoryFullName);
   if (!repoResult.success) {
     logger.error("Failed to look up repository", {
@@ -71,10 +72,62 @@ async function lookupRepositoryAndCheckIdempotency(
     });
     return err("REVIEW_DB_ERROR");
   }
+  return ok(repoResult.data.id);
+}
 
+async function createNewReviewRecord(
+  repositoryId: RepositoryId,
+  request: ReviewRequest,
+): Promise<Result<ReviewId, ReviewEngineError>> {
+  const createResult = await createReviewRecord({
+    repositoryId,
+    pullRequestNumber: request.pullRequestNumber,
+    commitSha: request.commitSha,
+  });
+  if (!createResult.success) {
+    logger.error("Failed to create review record", {
+      error: createResult.error,
+    });
+    return err("REVIEW_DB_ERROR");
+  }
+  return ok(createResult.data.id);
+}
+
+async function claimFailedReviewForRetry(
+  reviewId: ReviewId,
+  commitSha: string,
+): Promise<Result<ReviewId, ReviewEngineError>> {
+  const resetResult = await resetFailedReviewForRetry(reviewId);
+  if (!resetResult.success) {
+    logger.error("Failed to reset review for retry", {
+      reviewId,
+      error: resetResult.error,
+    });
+    return err("REVIEW_DB_ERROR");
+  }
+  if (!resetResult.data) {
+    logger.info("Failed review already claimed by another job, skipping", {
+      reviewId,
+      commitSha,
+    });
+    return err("REVIEW_ALREADY_EXISTS");
+  }
+  logger.info("Retrying failed review", { reviewId, commitSha });
+  return ok(reviewId);
+}
+
+/**
+ * Returns the review to work on: a new PROCESSING review, or a FAILED review
+ * for the same commit reset for a retry. Any other existing review means the
+ * commit is already reviewed or in progress.
+ */
+async function claimReviewRecord(
+  repositoryId: RepositoryId,
+  request: ReviewRequest,
+): Promise<Result<ReviewId, ReviewEngineError>> {
   const existingResult = await findExistingReviewByCommitSha(
-    repoResult.data.id,
-    commitSha,
+    repositoryId,
+    request.commitSha,
   );
   if (!existingResult.success) {
     logger.error("Idempotency check failed", {
@@ -82,15 +135,19 @@ async function lookupRepositoryAndCheckIdempotency(
     });
     return err("REVIEW_DB_ERROR");
   }
-  if (existingResult.data) {
-    logger.info("Review already exists for commit, skipping", {
-      reviewId: existingResult.data.id,
-      commitSha,
-    });
-    return err("REVIEW_ALREADY_EXISTS");
+
+  const existing = existingResult.data;
+  if (!existing) return createNewReviewRecord(repositoryId, request);
+  if (existing.status === "FAILED") {
+    return claimFailedReviewForRetry(existing.id, request.commitSha);
   }
 
-  return ok({ repositoryId: repoResult.data.id });
+  logger.info("Review already exists for commit, skipping", {
+    reviewId: existing.id,
+    status: existing.status,
+    commitSha: request.commitSha,
+  });
+  return err("REVIEW_ALREADY_EXISTS");
 }
 
 async function markReviewFailed(
@@ -304,38 +361,38 @@ async function analyzeAllChunks(
   });
 }
 
-async function postReviewToGitHub(
-  githubService: GitHubService,
-  owner: string,
-  repo: string,
-  request: ReviewRequest,
-  reviewId: ReviewId,
+interface PreparedGitHubReview {
+  readonly findingsToSave: readonly ReviewFinding[];
+  readonly payload: PullRequestReviewPayload;
+}
+
+function prepareGitHubReview(
+  commitSha: string,
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
   llmSummary: string,
-): Promise<Result<ReviewFinding[], ReviewEngineError>> {
+): PreparedGitHubReview {
   const { mappedComments, unmappedFindings } = mapFindingsToGitHubComments(
     findings,
     parsedDiff,
-  );
-
-  const reviewSummary = buildReviewSummary(
-    llmSummary,
-    mappedComments.length,
-    unmappedFindings,
   );
 
   const reviewEvent = findings.some((f) => f.severity === "CRITICAL")
     ? "REQUEST_CHANGES"
     : "COMMENT";
 
-  const postResult = await githubService.postPullRequestReview(
-    owner,
-    repo,
-    request.pullRequestNumber,
-    {
-      commitSha: request.commitSha,
-      body: reviewSummary,
+  return {
+    findingsToSave: [
+      ...mappedComments.map((c) => c.finding),
+      ...unmappedFindings.map((u) => u.finding),
+    ],
+    payload: {
+      commitSha,
+      body: buildReviewSummary(
+        llmSummary,
+        mappedComments.length,
+        unmappedFindings,
+      ),
       event: reviewEvent,
       comments: mappedComments.map((c) => ({
         path: c.path,
@@ -344,6 +401,19 @@ async function postReviewToGitHub(
         body: c.formattedBody,
       })),
     },
+  };
+}
+
+async function postReviewToGitHub(
+  context: ReviewStepsContext,
+  payload: PullRequestReviewPayload,
+): Promise<Result<void, ReviewEngineError>> {
+  const { githubService, owner, repo, request, reviewId } = context;
+  const postResult = await githubService.postPullRequestReview(
+    owner,
+    repo,
+    request.pullRequestNumber,
+    payload,
   );
 
   if (!postResult.success) {
@@ -359,24 +429,18 @@ async function postReviewToGitHub(
     githubReviewId: postResult.data.githubReviewId,
     postedComments: postResult.data.postedCommentCount,
   });
-
-  return ok([
-    ...mappedComments.map((c) => c.finding),
-    ...unmappedFindings.map((u) => u.finding),
-  ]);
+  return ok(undefined);
 }
 
-async function saveCompletedReview(
+async function saveFindingsOrFailReview(
   reviewId: ReviewId,
   summary: string,
-  processingTimeMs: number,
   findings: readonly ReviewFinding[],
 ): Promise<Result<void, ReviewEngineError>> {
-  const saveResult = await completeReviewWithComments({
+  const saveResult = await saveReviewFindings({
     reviewId,
     summary,
     issuesFound: findings.length,
-    processingTimeMs,
     comments: findings.map((finding) => ({
       filePath: finding.filePath,
       lineNumber: finding.lineNumber,
@@ -399,20 +463,38 @@ async function saveCompletedReview(
   return ok(undefined);
 }
 
+async function completeReviewOrFail(
+  reviewId: ReviewId,
+  startTime: number,
+): Promise<Result<number, ReviewEngineError>> {
+  const processingTimeMs = Date.now() - startTime;
+  const completeResult = await markReviewCompleted(reviewId, processingTimeMs);
+  if (!completeResult.success) {
+    logger.error("Failed to mark review completed", {
+      reviewId,
+      error: completeResult.error,
+    });
+    await markReviewFailed(reviewId, "Failed to mark review completed");
+    return err("REVIEW_DB_ERROR");
+  }
+  return ok(processingTimeMs);
+}
+
 async function completeReviewEarly(
   reviewId: ReviewId,
   startTime: number,
   summary: string,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
-  const processingTimeMs = Date.now() - startTime;
-  const saveResult = await saveCompletedReview(
-    reviewId,
-    summary,
-    processingTimeMs,
-    [],
-  );
+  const saveResult = await saveFindingsOrFailReview(reviewId, summary, []);
   if (!saveResult.success) return saveResult;
-  return ok({ reviewId, issuesFound: 0, processingTimeMs, summary });
+  const completeResult = await completeReviewOrFail(reviewId, startTime);
+  if (!completeResult.success) return completeResult;
+  return ok({
+    reviewId,
+    issuesFound: 0,
+    processingTimeMs: completeResult.data,
+    summary,
+  });
 }
 
 interface ReviewStepsContext {
@@ -475,68 +557,60 @@ async function runReviewSteps(
     );
   }
 
-  return analyzePostAndSaveReview(context, chunks.data, parsedDiff);
+  return analyzeSaveAndPostReview(context, chunks.data, parsedDiff);
 }
 
-async function analyzePostAndSaveReview(
+async function analyzeSaveAndPostReview(
   context: ReviewStepsContext,
   chunks: readonly ReviewChunk[],
   parsedDiff: ParsedDiff,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
-  const {
-    reviewId,
-    request,
-    owner,
-    repo,
-    githubService,
-    llmService,
-    startTime,
-  } = context;
+  const { reviewId, request, llmService, startTime } = context;
 
   const llmResult = await analyzeAllChunks(llmService, chunks);
   if (!llmResult.success) {
     await markReviewFailed(reviewId, "LLM analysis failed");
     return err("REVIEW_LLM_FAILED");
   }
+  const { findings, summary } = llmResult.data;
 
   logger.info("LLM analysis complete", {
-    findingCount: llmResult.data.findings.length,
+    findingCount: findings.length,
     inputTokens: llmResult.data.totalInputTokens,
     outputTokens: llmResult.data.totalOutputTokens,
   });
 
-  const postResult = await postReviewToGitHub(
-    githubService,
-    owner,
-    repo,
-    request,
-    reviewId,
-    llmResult.data.findings,
+  const review = prepareGitHubReview(
+    request.commitSha,
+    findings,
     parsedDiff,
-    llmResult.data.summary,
+    summary,
   );
-  if (!postResult.success) return postResult;
 
-  const processingTimeMs = Date.now() - startTime;
-  const saveResult = await saveCompletedReview(
+  const saveResult = await saveFindingsOrFailReview(
     reviewId,
-    llmResult.data.summary,
-    processingTimeMs,
-    postResult.data,
+    summary,
+    review.findingsToSave,
   );
   if (!saveResult.success) return saveResult;
 
+  const postResult = await postReviewToGitHub(context, review.payload);
+  if (!postResult.success) return postResult;
+
+  const completeResult = await completeReviewOrFail(reviewId, startTime);
+  if (!completeResult.success) return completeResult;
+
   logger.info("Review complete", {
     reviewId,
-    issuesFound: llmResult.data.findings.length,
-    processingTimeMs,
+    issuesFound: findings.length,
+    processingTimeMs: completeResult.data,
   });
 
   return ok({
     reviewId,
-    issuesFound: llmResult.data.findings.length,
-    processingTimeMs,
-    summary: llmResult.data.summary,
+    issuesFound: findings.length,
+    processingTimeMs: completeResult.data,
+    summary,
   });
 }
 
@@ -576,26 +650,14 @@ export async function executeReview(
     commitSha: request.commitSha,
   });
 
-  const lookupResult = await lookupRepositoryAndCheckIdempotency(
-    request.repositoryFullName,
-    request.commitSha,
-  );
-  if (!lookupResult.success) return lookupResult;
+  const repositoryResult = await lookupRepository(request.repositoryFullName);
+  if (!repositoryResult.success) return repositoryResult;
 
-  const createResult = await createReviewRecord({
-    repositoryId: lookupResult.data.repositoryId,
-    pullRequestNumber: request.pullRequestNumber,
-    commitSha: request.commitSha,
-  });
-  if (!createResult.success) {
-    logger.error("Failed to create review record", {
-      error: createResult.error,
-    });
-    return err("REVIEW_DB_ERROR");
-  }
+  const claimResult = await claimReviewRecord(repositoryResult.data, request);
+  if (!claimResult.success) return claimResult;
 
   return runReviewStepsWithFailureGuard({
-    reviewId: createResult.data.id,
+    reviewId: claimResult.data,
     request,
     owner,
     repo,

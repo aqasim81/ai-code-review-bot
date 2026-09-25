@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 6: Testing & Polish** — Complete. All 6 phases done. 165 tests across 11 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
+**Phase 6: Testing & Polish** — Complete. All 6 phases done. 172 tests across 11 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
 
 ## Tech Stack
 
@@ -53,7 +53,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 **Data flow:**
 ```
 Webhook → Route Handler → Validate Signature → Enqueue Job (BullMQ)
-  → Worker: Fetch Diff → Parse AST → Build Context → Call LLM → Map Comments → Post Review → Save to DB
+  → Worker: Fetch Diff → Parse AST → Build Context → Call LLM → Map Comments → Save Findings → Post Review → Mark Completed
 ```
 
 **Database:** Prisma ORM exclusively. All queries through `src/lib/db/queries.ts`. Transactions for multi-table writes. Descriptive migration names.
