@@ -95,9 +95,13 @@ async function createNewReviewRecord(
 
 async function claimFailedReviewForRetry(
   reviewId: ReviewId,
-  commitSha: string,
+  request: ReviewRequest,
 ): Promise<Result<ReviewId, ReviewEngineError>> {
-  const resetResult = await resetFailedReviewForRetry(reviewId);
+  const { commitSha, pullRequestNumber } = request;
+  const resetResult = await resetFailedReviewForRetry(
+    reviewId,
+    pullRequestNumber,
+  );
   if (!resetResult.success) {
     logger.error("Failed to reset review for retry", {
       reviewId,
@@ -139,7 +143,7 @@ async function claimReviewRecord(
   const existing = existingResult.data;
   if (!existing) return createNewReviewRecord(repositoryId, request);
   if (existing.status === "FAILED") {
-    return claimFailedReviewForRetry(existing.id, request.commitSha);
+    return claimFailedReviewForRetry(existing.id, request);
   }
 
   logger.info("Review already exists for commit, skipping", {

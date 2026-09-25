@@ -388,6 +388,7 @@ describe("executeReview — review pipeline", () => {
     expect(result.data.reviewId).toBe(reviewId("failed-review"));
     expect(resetFailedReviewForRetry).toHaveBeenCalledWith(
       reviewId("failed-review"),
+      42,
     );
     expect(createReviewRecord).not.toHaveBeenCalled();
     expect(github.postPullRequestReview).toHaveBeenCalled();

@@ -21,9 +21,13 @@ retryable with the old order would have allowed a retry to post the same comment
   (a single-row update).
 - `claimReviewRecord` handles an existing review for the same commit:
   - none → create a PROCESSING review;
-  - FAILED → `resetFailedReviewForRetry` moves it back to PROCESSING and deletes the old comments
-    in one transaction, guarded by `status = FAILED` so only one job can claim it;
+  - FAILED → `resetFailedReviewForRetry` moves it back to PROCESSING under the retrying job's
+    pull request number, in one transaction guarded by `status = FAILED` so only one job can
+    claim it;
   - PENDING, PROCESSING or COMPLETED → `REVIEW_ALREADY_EXISTS`.
+- `failReview` deletes the review's comments and resets `issuesFound` in the same transaction.
+  The findings are saved before posting, so a FAILED review would otherwise show findings that
+  may never have reached the pull request.
 
 ## Consequences
 
@@ -32,7 +36,11 @@ retryable with the old order would have allowed a retry to post the same comment
 - Known gap: if the post succeeds but `markReviewCompleted` then fails, the review is marked
   FAILED and a retry posts the comments a second time. The window is one single-row update
   after a successful network call.
-- Known gap: a worker process killed mid-review leaves the review PROCESSING. Retries skip it.
+- Known gap: if GitHub accepts the review but the call then fails (a timeout or 5xx after the
+  write), the review is marked FAILED and a retry posts the comments a second time.
+- Known gap: a review stays PROCESSING when the worker process is killed mid-review, or when
+  `failReview` itself fails. Retries return `REVIEW_ALREADY_EXISTS` and the job is recorded as
+  completed. Treating long-running PROCESSING reviews as stale would close this.
 - `githubCommentId` on review comments is still never filled in.
 
 ## Alternatives considered

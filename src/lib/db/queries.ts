@@ -106,12 +106,14 @@ export async function findExistingReviewByCommitSha(
 }
 
 /**
- * Claims a FAILED review for a retry: moves it back to PROCESSING and clears
- * the comments saved by the failed attempt. Returns false when the review is
- * no longer FAILED (another job already claimed it).
+ * Claims a FAILED review for a retry: moves it back to PROCESSING under the
+ * retrying job's pull request and clears any comments left by the failed
+ * attempt. Returns false when the review is no longer FAILED (another job
+ * already claimed it).
  */
 export async function resetFailedReviewForRetry(
   reviewId: ReviewId,
+  pullRequestNumber: number,
 ): Promise<Result<boolean, string>> {
   try {
     const claimed = await prisma.$transaction(async (tx) => {
@@ -119,6 +121,7 @@ export async function resetFailedReviewForRetry(
         where: { id: reviewId, status: "FAILED" },
         data: {
           status: "PROCESSING",
+          pullRequestNumber,
           summary: null,
           issuesFound: 0,
           processingTimeMs: null,
@@ -223,19 +226,27 @@ export async function markReviewCompleted(
   }
 }
 
+/**
+ * Marks a review FAILED and drops any findings saved before the failure, since
+ * they may never have been posted to GitHub.
+ */
 export async function failReview(
   reviewId: ReviewId,
   errorMessage: string,
 ): Promise<Result<void, string>> {
   try {
-    await prisma.review.update({
-      where: { id: reviewId },
-      data: {
-        status: "FAILED",
-        summary: `Review failed: ${errorMessage}`,
-        completedAt: new Date(),
-      },
-    });
+    await prisma.$transaction([
+      prisma.reviewComment.deleteMany({ where: { reviewId } }),
+      prisma.review.update({
+        where: { id: reviewId },
+        data: {
+          status: "FAILED",
+          summary: `Review failed: ${errorMessage}`,
+          issuesFound: 0,
+          completedAt: new Date(),
+        },
+      }),
+    ]);
     return ok(undefined);
   } catch (error) {
     const message =
