@@ -14,6 +14,7 @@ Behaviour worth knowing that isn't obvious from one file:
 - **Partial reviews:** a chunk the model rejects, or one still failing on the job's final attempt (`ReviewRequest.isFinalAttempt`), is left out and named in the summary. A reply cut off at the output limit is noted in the summary too.
 - **Superseded reviews:** before posting, the engine checks the PR head. A review of a replaced commit is `SUPERSEDED`: not posted, findings dropped, never a base for push (delta) reviews.
 - **Final statuses:** a deleted or suspended installation (404/403 on the token request) skips the job. The worker's `failed` handler marks unfinished job records FAILED, because BullMQ fails a job that stalled too often without running the processor.
+- **Owned and renewed records:** each run of a job claims its job record with a run token, and each review attempt its review with a claim token; writes need the current token. The owner renews its record every 5 minutes (for at most 3 hours). The worker's sweep fails reviews and job records not renewed for 30 minutes, so a dead worker or a failed final write never leaves one PROCESSING (#113, #114, #115).
 
 ## Tech Stack
 
@@ -127,7 +128,7 @@ Bug issues carry a `kind: …` label matching these entries (lifecycle, error-cl
 
 - **Text Postgres rejects.** Text from outside (model output, webhook payloads, user input) can contain NUL (`\u0000`), which text and jsonb columns reject, failing the whole write. Strip or reject NUL before storing it (#67, #75).
 - **Values outside a column's range.** Numbers from the model (line numbers, confidence) are checked against the column's range before saving; one bad value fails the whole review's save (#55).
-- **Records left unfinished.** Every Job and Review status write is guarded by the current status. Every exit path (a returned error, a throw, a stall, an unrecoverable failure, a crash between two writes) leaves a final status (#13, #23, #30, #53, #66).
+- **Records left unfinished.** Every Job and Review status write is guarded by the current status or the owner's token. Every exit path (a returned error, a throw, a stall, an unrecoverable failure, a crash between two writes, a failed final write) leaves a final status, with the sweep as the backstop (#13, #23, #30, #53, #66, #113, #115).
 - **Errors treated alike.** Every external call (GitHub, the model, the queue) classifies its errors as retryable, rate-limited or permanent. A retry must be able to help (#14, #22, #54).
 - **Old and new line numbers.** Diff line numbers are either old-file or new-file; never mix them in one format or one lookup (#50, #64).
 - **Mocks confirm assumptions.** A test that mocks Postgres, BullMQ, GitHub or the model can't find these bugs. When a fix depends on how the real service behaves (what it rejects, how it fails), check the service's source or docs and cite it in the PR.

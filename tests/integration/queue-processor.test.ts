@@ -11,6 +11,7 @@ import {
   createJobRecord,
   failUnfinishedJobRecord,
   findLastReviewedCommitSha,
+  renewJobRecord,
   updateJobRecord,
 } from "@/lib/db/queries";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
@@ -88,6 +89,7 @@ function setupDefaultMocks() {
     ok({ id, runToken: "run-token-2" }),
   );
   vi.mocked(updateJobRecord).mockResolvedValue(ok(true));
+  vi.mocked(renewJobRecord).mockResolvedValue(ok(true));
   vi.mocked(executeReview).mockResolvedValue(ok(createReviewEngineResult()));
   vi.mocked(findLastReviewedCommitSha).mockResolvedValue(
     ok("last-reviewed-sha"),
@@ -513,6 +515,72 @@ describe("processReviewJob", () => {
     );
 
     expect(updateJobRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews the job record while the review runs and stops after (#113)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let finishReview: () => void = () => {};
+      vi.mocked(executeReview).mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          finishReview = resolve;
+        });
+        return ok(createReviewEngineResult());
+      });
+
+      const run = processReviewJob(createMockJob());
+      await vi.waitFor(() => expect(executeReview).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+      expect(renewJobRecord).toHaveBeenCalledTimes(8);
+      expect(renewJobRecord).toHaveBeenCalledWith(NEW_RUN);
+
+      finishReview();
+      await run;
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+      expect(renewJobRecord).toHaveBeenCalledTimes(8);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops renewing the job record when the review fails (#113)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      vi.mocked(executeReview).mockResolvedValue(err("REVIEW_LLM_FAILED"));
+
+      await expect(processReviewJob(createMockJob())).rejects.toThrow(
+        "REVIEW_LLM_FAILED",
+      );
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+      expect(renewJobRecord).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops renewing the job record of a run past the renewal limit (#113)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      let finishReview: () => void = () => {};
+      vi.mocked(executeReview).mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          finishReview = resolve;
+        });
+        return ok(createReviewEngineResult());
+      });
+
+      const run = processReviewJob(createMockJob());
+      await vi.waitFor(() => expect(executeReview).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
+
+      // Renewed every 5 minutes up to the 3-hour limit: minutes 5 to 180.
+      expect(renewJobRecord).toHaveBeenCalledTimes(36);
+      finishReview();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops before reviewing when claiming the saved job record fails", async () => {
