@@ -87,6 +87,19 @@ function extractJsonFromResponse(text: string): string | null {
   return null;
 }
 
+// Line numbers are stored in a Postgres integer column, so a finding with a
+// line number outside 1..MAX_LINE_NUMBER would fail the whole review's save.
+const MAX_LINE_NUMBER = 2_147_483_647;
+
+function isValidLineNumber(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_LINE_NUMBER
+  );
+}
+
 function validateFinding(raw: unknown): ReviewFinding | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -95,10 +108,7 @@ function validateFinding(raw: unknown): ReviewFinding | null {
   const obj = raw as Record<string, unknown>;
 
   const filePath = typeof obj.filePath === "string" ? obj.filePath : null;
-  const lineNumber =
-    typeof obj.lineNumber === "number" && Number.isFinite(obj.lineNumber)
-      ? obj.lineNumber
-      : null;
+  const lineNumber = isValidLineNumber(obj.lineNumber) ? obj.lineNumber : null;
   const message = typeof obj.message === "string" ? obj.message : null;
   const suggestion = typeof obj.suggestion === "string" ? obj.suggestion : null;
   const confidence =

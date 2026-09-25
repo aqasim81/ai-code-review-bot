@@ -160,11 +160,11 @@ export function mapFindingsToGitHubComments(
 }
 
 export function buildReviewSummary(
-  llmSummary: string,
+  summaryText: string,
   mappedCount: number,
   unmappedFindings: readonly UnmappedFinding[],
 ): string {
-  let summary = llmSummary;
+  let summary = summaryText;
 
   if (unmappedFindings.length > 0) {
     summary += "\n\n---\n\n**Additional findings** (outside diff context):\n";

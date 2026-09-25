@@ -167,6 +167,31 @@ describe("parseLlmReviewResponse", () => {
     expect(result.data).toHaveLength(0);
   });
 
+  it("skips findings whose line number is not a positive 32-bit integer", () => {
+    const finding = (lineNumber: number) => ({
+      filePath: "src/a.ts",
+      lineNumber,
+      category: "bugs",
+      severity: "warning",
+      message: "Problem",
+      suggestion: "Fix it",
+      confidence: 0.9,
+    });
+    const response = JSON.stringify([
+      finding(0),
+      finding(-3),
+      finding(12.5),
+      finding(3_000_000_000),
+      finding(7),
+    ]);
+
+    const result = parseLlmReviewResponse(response);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((item) => item.lineNumber)).toEqual([7]);
+  });
+
   it("returns valid findings alongside invalid ones (partial success)", () => {
     const result = parseLlmReviewResponse(MISSING_FIELDS);
     expect(result.success).toBe(true);

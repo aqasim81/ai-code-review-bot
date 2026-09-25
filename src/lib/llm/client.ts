@@ -69,11 +69,8 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
         return parseResult;
       }
 
-      const summary = buildSummary(parseResult.data.length);
-
       return ok({
         findings: parseResult.data,
-        summary,
         tokenUsage: { inputTokens, outputTokens },
       });
     },
@@ -195,13 +192,6 @@ function isRetryableError(error: LLMError): boolean {
     error === "LLM_TIMEOUT" ||
     error === "LLM_UNKNOWN_ERROR"
   );
-}
-
-function buildSummary(findingCount: number): string {
-  if (findingCount === 0) {
-    return "No issues found in this review.";
-  }
-  return `Found ${findingCount} issue${findingCount === 1 ? "" : "s"} in this review.`;
 }
 
 function sleep(ms: number): Promise<void> {
