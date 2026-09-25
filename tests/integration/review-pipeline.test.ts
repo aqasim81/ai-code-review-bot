@@ -16,13 +16,11 @@ vi.mock("@/lib/review/ast-parser");
 vi.mock("@/lib/repository-utils");
 
 import {
-  completeReview,
+  completeReviewWithComments,
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
   findRepositoryByFullName,
-  saveReviewComments,
-  updateReviewStatus,
 } from "@/lib/db/queries";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
@@ -39,10 +37,8 @@ function setupSuccessfulDbMocks() {
   );
   vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
   vi.mocked(createReviewRecord).mockResolvedValue(ok({ id: reviewId() }));
-  vi.mocked(updateReviewStatus).mockResolvedValue(ok(undefined));
-  vi.mocked(completeReview).mockResolvedValue(ok(undefined));
+  vi.mocked(completeReviewWithComments).mockResolvedValue(ok(undefined));
   vi.mocked(failReview).mockResolvedValue(ok(undefined));
-  vi.mocked(saveReviewComments).mockResolvedValue(ok({ count: 1 }));
   vi.mocked(initializeAstParser).mockResolvedValue(ok(undefined));
   vi.mocked(parseFileAst).mockResolvedValue(
     ok({
@@ -83,7 +79,6 @@ describe("executeReview — review pipeline", () => {
     );
     expect(findExistingReviewByCommitSha).toHaveBeenCalled();
     expect(createReviewRecord).toHaveBeenCalled();
-    expect(updateReviewStatus).toHaveBeenCalledWith(reviewId(), "PROCESSING");
     expect(github.fetchPullRequestDiff).toHaveBeenCalledWith(
       "test-owner",
       "test-repo",
@@ -91,8 +86,9 @@ describe("executeReview — review pipeline", () => {
     );
     expect(llm.analyzeReviewChunk).toHaveBeenCalled();
     expect(github.postPullRequestReview).toHaveBeenCalled();
-    expect(saveReviewComments).toHaveBeenCalled();
-    expect(completeReview).toHaveBeenCalled();
+    expect(completeReviewWithComments).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewId: reviewId() }),
+    );
   });
 
   it("returns REVIEW_ALREADY_EXISTS when review exists for commit SHA", async () => {
@@ -196,7 +192,9 @@ describe("executeReview — review pipeline", () => {
     if (!result.success) return;
     expect(result.data.issuesFound).toBe(0);
     expect(llm.analyzeReviewChunk).not.toHaveBeenCalled();
-    expect(completeReview).toHaveBeenCalled();
+    expect(completeReviewWithComments).toHaveBeenCalledWith(
+      expect.objectContaining({ issuesFound: 0, comments: [] }),
+    );
   });
 
   it("posts REQUEST_CHANGES event when findings include CRITICAL severity", async () => {
@@ -270,20 +268,25 @@ describe("executeReview — review pipeline", () => {
 
     await executeReview(createReviewRequest(), github, llm);
 
-    expect(saveReviewComments).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          reviewId: reviewId(),
-          category: finding.category,
-          severity: finding.severity,
-          message: finding.message,
-        }),
-      ]),
+    expect(completeReviewWithComments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewId: reviewId(),
+        issuesFound: 1,
+        comments: [
+          expect.objectContaining({
+            category: finding.category,
+            severity: finding.severity,
+            message: finding.message,
+          }),
+        ],
+      }),
     );
   });
 
   it("marks the review FAILED, not COMPLETED, when saving its comments fails", async () => {
-    vi.mocked(saveReviewComments).mockResolvedValue(err("DB write failed"));
+    vi.mocked(completeReviewWithComments).mockResolvedValue(
+      err("DB write failed"),
+    );
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi
         .fn()
@@ -302,8 +305,54 @@ describe("executeReview — review pipeline", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
-    expect(failReview).toHaveBeenCalledWith(reviewId(), expect.any(String));
-    expect(completeReview).not.toHaveBeenCalled();
+    expect(failReview).toHaveBeenCalledWith(
+      reviewId(),
+      "Failed to save review results",
+    );
+  });
+
+  it("returns REVIEW_DB_ERROR when an early-completed review cannot be saved", async () => {
+    vi.mocked(completeReviewWithComments).mockResolvedValue(
+      err("DB write failed"),
+    );
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok("diff --git a/image.png b/image.png\nBinary files differ\n"),
+        ),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_DB_ERROR");
+    expect(failReview).toHaveBeenCalledWith(
+      reviewId(),
+      "Failed to save review results",
+    );
+  });
+
+  it("keeps the original error when marking the review failed also fails", async () => {
+    vi.mocked(failReview).mockResolvedValue(err("DB down"));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(err("GITHUB_NOT_FOUND")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_DIFF_FETCH_FAILED");
   });
 
   it("filters files by filePathFilter for delta reviews", async () => {
@@ -358,7 +407,9 @@ describe("executeReview — review pipeline", () => {
     if (!result.success) return;
     expect(result.data.issuesFound).toBe(0);
     expect(llm.analyzeReviewChunk).not.toHaveBeenCalled();
-    expect(completeReview).toHaveBeenCalled();
+    expect(completeReviewWithComments).toHaveBeenCalledWith(
+      expect.objectContaining({ issuesFound: 0, comments: [] }),
+    );
   });
 
   it("returns REVIEW_DB_ERROR for invalid repository full name", async () => {

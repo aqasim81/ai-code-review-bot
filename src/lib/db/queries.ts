@@ -20,67 +20,45 @@ interface CreateInstallationInput {
   githubAccountType: AccountType;
 }
 
-export async function createInstallation(
-  input: CreateInstallationInput,
-): Promise<Result<{ id: InstallationId }, string>> {
-  try {
-    const installation = await prisma.installation.upsert({
-      where: { githubInstallationId: input.githubInstallationId },
-      update: {
-        githubAccountLogin: input.githubAccountLogin,
-        githubAccountType: input.githubAccountType,
-        status: "ACTIVE",
-      },
-      create: {
-        githubInstallationId: input.githubInstallationId,
-        githubAccountLogin: input.githubAccountLogin,
-        githubAccountType: input.githubAccountType,
-        status: "ACTIVE",
-      },
-    });
-    return ok({ id: installation.id as InstallationId });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to create installation: ${message}`);
-  }
-}
-
 interface CreateRepositoryInput {
   githubRepoId: number;
   fullName: string;
 }
 
-export async function createRepositories(
-  installationId: InstallationId,
+export async function createInstallationWithRepositories(
+  installation: CreateInstallationInput,
   repositories: CreateRepositoryInput[],
-): Promise<Result<{ count: number }, string>> {
+): Promise<Result<{ id: InstallationId; repositoryCount: number }, string>> {
   try {
-    const results = await prisma.$transaction(
-      repositories.map((repo) =>
-        prisma.repository.upsert({
+    const id = await prisma.$transaction(async (tx) => {
+      const saved = await tx.installation.upsert({
+        where: { githubInstallationId: installation.githubInstallationId },
+        update: {
+          githubAccountLogin: installation.githubAccountLogin,
+          githubAccountType: installation.githubAccountType,
+          status: "ACTIVE",
+        },
+        create: { ...installation, status: "ACTIVE" },
+      });
+      for (const repo of repositories) {
+        await tx.repository.upsert({
           where: {
             installationId_githubRepoId: {
-              installationId,
+              installationId: saved.id,
               githubRepoId: repo.githubRepoId,
             },
           },
-          update: {
-            fullName: repo.fullName,
-          },
-          create: {
-            installationId,
-            githubRepoId: repo.githubRepoId,
-            fullName: repo.fullName,
-          },
-        }),
-      ),
-    );
-    return ok({ count: results.length });
+          update: { fullName: repo.fullName },
+          create: { installationId: saved.id, ...repo },
+        });
+      }
+      return saved.id as InstallationId;
+    });
+    return ok({ id, repositoryCount: repositories.length });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to create repositories: ${message}`);
+    return err(`Failed to save installation and repositories: ${message}`);
   }
 }
 
@@ -140,7 +118,7 @@ export async function createReviewRecord(
         repositoryId: input.repositoryId,
         pullRequestNumber: input.pullRequestNumber,
         commitSha: input.commitSha,
-        status: "PENDING",
+        status: "PROCESSING",
       },
     });
     return ok({ id: review.id as ReviewId });
@@ -151,25 +129,7 @@ export async function createReviewRecord(
   }
 }
 
-export async function updateReviewStatus(
-  reviewId: ReviewId,
-  status: ReviewStatus,
-): Promise<Result<void, string>> {
-  try {
-    await prisma.review.update({
-      where: { id: reviewId },
-      data: { status },
-    });
-    return ok(undefined);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to update review status: ${message}`);
-  }
-}
-
 interface SaveReviewCommentInput {
-  reviewId: ReviewId;
   filePath: string;
   lineNumber: number;
   category: CommentCategory;
@@ -180,61 +140,41 @@ interface SaveReviewCommentInput {
   githubCommentId: string | null;
 }
 
-export async function saveReviewComments(
-  comments: SaveReviewCommentInput[],
-): Promise<Result<{ count: number }, string>> {
-  if (comments.length === 0) {
-    return ok({ count: 0 });
-  }
-
-  try {
-    const result = await prisma.reviewComment.createMany({
-      data: comments.map((comment) => ({
-        reviewId: comment.reviewId,
-        filePath: comment.filePath,
-        lineNumber: comment.lineNumber,
-        category: comment.category,
-        severity: comment.severity,
-        message: comment.message,
-        suggestion: comment.suggestion,
-        confidence: comment.confidence,
-        githubCommentId: comment.githubCommentId,
-      })),
-    });
-    return ok({ count: result.count });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to save review comments: ${message}`);
-  }
-}
-
 interface CompleteReviewInput {
   reviewId: ReviewId;
   summary: string;
   issuesFound: number;
   processingTimeMs: number;
+  comments: SaveReviewCommentInput[];
 }
 
-export async function completeReview(
+export async function completeReviewWithComments(
   input: CompleteReviewInput,
 ): Promise<Result<void, string>> {
   try {
-    await prisma.review.update({
-      where: { id: input.reviewId },
-      data: {
-        status: "COMPLETED",
-        summary: input.summary,
-        issuesFound: input.issuesFound,
-        processingTimeMs: input.processingTimeMs,
-        completedAt: new Date(),
-      },
-    });
+    await prisma.$transaction([
+      prisma.reviewComment.createMany({
+        data: input.comments.map((comment) => ({
+          ...comment,
+          reviewId: input.reviewId,
+        })),
+      }),
+      prisma.review.update({
+        where: { id: input.reviewId },
+        data: {
+          status: "COMPLETED",
+          summary: input.summary,
+          issuesFound: input.issuesFound,
+          processingTimeMs: input.processingTimeMs,
+          completedAt: new Date(),
+        },
+      }),
+    ]);
     return ok(undefined);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to complete review: ${message}`);
+    return err(`Failed to save review results: ${message}`);
   }
 }
 

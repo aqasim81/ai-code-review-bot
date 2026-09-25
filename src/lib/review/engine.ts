@@ -1,11 +1,9 @@
 import {
-  completeReview,
+  completeReviewWithComments,
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
   findRepositoryByFullName,
-  saveReviewComments,
-  updateReviewStatus,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
@@ -95,6 +93,20 @@ async function lookupRepositoryAndCheckIdempotency(
   return ok({ repositoryId: repoResult.data.id });
 }
 
+async function markReviewFailed(
+  reviewId: ReviewId,
+  reason: string,
+): Promise<void> {
+  const result = await failReview(reviewId, reason);
+  if (!result.success) {
+    logger.error("Failed to mark review as failed", {
+      reviewId,
+      reason,
+      error: result.error,
+    });
+  }
+}
+
 async function fetchAndParseDiff(
   githubService: GitHubService,
   owner: string,
@@ -109,7 +121,7 @@ async function fetchAndParseDiff(
   );
   if (!diffResult.success) {
     logger.error("Failed to fetch diff", { error: diffResult.error });
-    await failReview(reviewId, "Failed to fetch PR diff");
+    await markReviewFailed(reviewId, "Failed to fetch PR diff");
     return err("REVIEW_DIFF_FETCH_FAILED");
   }
 
@@ -118,7 +130,7 @@ async function fetchAndParseDiff(
     logger.error("Failed to parse diff", {
       error: parsedDiffResult.error,
     });
-    await failReview(reviewId, "Failed to parse PR diff");
+    await markReviewFailed(reviewId, "Failed to parse PR diff");
     return err("REVIEW_DIFF_PARSE_FAILED");
   }
 
@@ -292,16 +304,15 @@ async function analyzeAllChunks(
   });
 }
 
-async function postAndSaveReviewResults(
+async function postReviewToGitHub(
   githubService: GitHubService,
   owner: string,
   repo: string,
   request: ReviewRequest,
-  reviewId: ReviewId,
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
   llmSummary: string,
-): Promise<void> {
+): Promise<ReviewFinding[]> {
   const { mappedComments, unmappedFindings } = mapFindingsToGitHubComments(
     findings,
     parsedDiff,
@@ -345,13 +356,24 @@ async function postAndSaveReviewResults(
     });
   }
 
-  const allFindingsForDb = [
+  return [
     ...mappedComments.map((c) => c.finding),
     ...unmappedFindings.map((u) => u.finding),
   ];
-  const saveResult = await saveReviewComments(
-    allFindingsForDb.map((finding) => ({
-      reviewId,
+}
+
+async function saveCompletedReview(
+  reviewId: ReviewId,
+  summary: string,
+  processingTimeMs: number,
+  findings: readonly ReviewFinding[],
+): Promise<Result<void, ReviewEngineError>> {
+  const saveResult = await completeReviewWithComments({
+    reviewId,
+    summary,
+    issuesFound: findings.length,
+    processingTimeMs,
+    comments: findings.map((finding) => ({
       filePath: finding.filePath,
       lineNumber: finding.lineNumber,
       category: finding.category,
@@ -361,26 +383,32 @@ async function postAndSaveReviewResults(
       confidence: finding.confidence,
       githubCommentId: null,
     })),
-  );
-
+  });
   if (!saveResult.success) {
-    logger.error("Failed to save review comments to DB", {
+    logger.error("Failed to save review results", {
+      reviewId,
       error: saveResult.error,
     });
+    await markReviewFailed(reviewId, "Failed to save review results");
+    return err("REVIEW_DB_ERROR");
   }
+  return ok(undefined);
 }
 
-function buildEarlyResult(
+async function completeReviewEarly(
   reviewId: ReviewId,
   startTime: number,
   summary: string,
-): ReviewEngineResult {
-  return {
+): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+  const processingTimeMs = Date.now() - startTime;
+  const saveResult = await saveCompletedReview(
     reviewId,
-    issuesFound: 0,
-    processingTimeMs: Date.now() - startTime,
     summary,
-  };
+    processingTimeMs,
+    [],
+  );
+  if (!saveResult.success) return saveResult;
+  return ok({ reviewId, issuesFound: 0, processingTimeMs, summary });
 }
 
 export async function executeReview(
@@ -422,14 +450,6 @@ export async function executeReview(
   }
   const reviewId = createResult.data.id;
 
-  const statusResult = await updateReviewStatus(reviewId, "PROCESSING");
-  if (!statusResult.success) {
-    logger.warn("Failed to update review to PROCESSING", {
-      reviewId,
-      error: statusResult.error,
-    });
-  }
-
   const diffResult = await fetchAndParseDiff(
     githubService,
     owner,
@@ -449,14 +469,11 @@ export async function executeReview(
     : diffResult.data;
 
   if (parsedDiff.files.length === 0) {
-    const summary = "No reviewable files in this PR.";
-    await completeReview({
+    return completeReviewEarly(
       reviewId,
-      summary,
-      issuesFound: 0,
-      processingTimeMs: Date.now() - startTime,
-    });
-    return ok(buildEarlyResult(reviewId, startTime, summary));
+      startTime,
+      "No reviewable files in this PR.",
+    );
   }
 
   const chunks = await enrichDiffWithContext(
@@ -467,23 +484,20 @@ export async function executeReview(
     request.commitSha,
   );
   if (!chunks.success) {
-    await failReview(reviewId, "Context enrichment failed");
+    await markReviewFailed(reviewId, "Context enrichment failed");
     return err("REVIEW_LLM_FAILED");
   }
   if (chunks.data.length === 0) {
-    const summary = "No reviewable content after filtering.";
-    await completeReview({
+    return completeReviewEarly(
       reviewId,
-      summary,
-      issuesFound: 0,
-      processingTimeMs: Date.now() - startTime,
-    });
-    return ok(buildEarlyResult(reviewId, startTime, summary));
+      startTime,
+      "No reviewable content after filtering.",
+    );
   }
 
   const llmResult = await analyzeAllChunks(llmService, chunks.data);
   if (!llmResult.success) {
-    await failReview(reviewId, "LLM analysis failed");
+    await markReviewFailed(reviewId, "LLM analysis failed");
     return err("REVIEW_LLM_FAILED");
   }
 
@@ -493,24 +507,24 @@ export async function executeReview(
     outputTokens: llmResult.data.totalOutputTokens,
   });
 
-  await postAndSaveReviewResults(
+  const findingsToSave = await postReviewToGitHub(
     githubService,
     owner,
     repo,
     request,
-    reviewId,
     llmResult.data.findings,
     parsedDiff,
     llmResult.data.summary,
   );
 
   const processingTimeMs = Date.now() - startTime;
-  await completeReview({
+  const saveResult = await saveCompletedReview(
     reviewId,
-    summary: llmResult.data.summary,
-    issuesFound: llmResult.data.findings.length,
+    llmResult.data.summary,
     processingTimeMs,
-  });
+    findingsToSave,
+  );
+  if (!saveResult.success) return saveResult;
 
   logger.info("Review complete", {
     reviewId,
