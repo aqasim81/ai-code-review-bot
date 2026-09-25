@@ -8,10 +8,15 @@ import {
 // Mock the SDK
 const mockCreate = vi.fn();
 
+// Like the SDK's APIError: the response headers and the parsed error body.
 class MockRateLimitError extends Error {
-  constructor() {
+  readonly headers: Headers;
+  readonly error: unknown;
+  constructor(headers: Record<string, string> = {}, body?: unknown) {
     super("Rate limited");
     this.name = "RateLimitError";
+    this.headers = new Headers(headers);
+    this.error = body;
   }
 }
 
@@ -332,6 +337,118 @@ describe("createLlmClient", () => {
     expect(result.success).toBe(true);
 
     vi.useRealTimers();
+  });
+
+  describe("on a rate limit", () => {
+    function rateLimitedThenOk(error: MockRateLimitError) {
+      mockCreate.mockRejectedValueOnce(error).mockResolvedValueOnce({
+        content: [{ type: "text", text: "[]" }],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      });
+    }
+
+    function analyze(maxRetries = 3) {
+      const service = createLlmClient({ apiKey: "test-key", maxRetries });
+      return service.analyzeReviewChunk(
+        createReviewChunk(),
+        createReviewPromptOptions(),
+      );
+    }
+
+    it("waits the seconds the retry-after header asks for", async () => {
+      vi.useFakeTimers();
+      rateLimitedThenOk(new MockRateLimitError({ "retry-after": "45" }));
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
+    it("prefers the retry-after-ms header", async () => {
+      vi.useFakeTimers();
+      rateLimitedThenOk(
+        new MockRateLimitError({
+          "retry-after-ms": "2500",
+          "retry-after": "3",
+        }),
+      );
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(2_400);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
+    it("reads a retry-after header given as a date", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      rateLimitedThenOk(
+        new MockRateLimitError({
+          "retry-after": "Thu, 01 Jan 2026 00:00:20 GMT",
+        }),
+      );
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
+    it("keeps the short backoff when there is no retry-after header", async () => {
+      vi.useFakeTimers();
+      rateLimitedThenOk(new MockRateLimitError());
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
+    it("leaves a wait longer than a minute to the job's backoff", async () => {
+      mockCreate.mockRejectedValue(
+        new MockRateLimitError({ "retry-after": "600" }),
+      );
+
+      const result = await analyze();
+
+      expect(result).toEqual({ success: false, error: "LLM_RATE_LIMITED" });
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry once the monthly spend cap is reached", async () => {
+      mockCreate.mockRejectedValue(
+        new MockRateLimitError(
+          {},
+          {
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "You have reached your API usage limits.",
+              details: { error_code: "enforced_spend_limit_reached" },
+            },
+          },
+        ),
+      );
+
+      const result = await analyze();
+
+      expect(result).toEqual({
+        success: false,
+        error: "LLM_SPEND_LIMIT_REACHED",
+      });
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("retries on timeout error", async () => {

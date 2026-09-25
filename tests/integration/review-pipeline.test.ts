@@ -446,7 +446,7 @@ describe("executeReview — review pipeline", () => {
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
     const llm = createMockLlmService({
-      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_RATE_LIMITED")),
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_TIMEOUT")),
     });
 
     const result = await executeReview(createReviewRequest(), github, llm);
@@ -490,6 +490,8 @@ describe("executeReview — review pipeline", () => {
     ["LLM_AUTH_FAILED", "REVIEW_LLM_REJECTED"],
     ["LLM_BAD_REQUEST", "REVIEW_LLM_REJECTED"],
     ["LLM_CONTEXT_TOO_LONG", "REVIEW_LLM_REJECTED"],
+    ["LLM_SPEND_LIMIT_REACHED", "REVIEW_LLM_REJECTED"],
+    ["LLM_RATE_LIMITED", "REVIEW_LLM_RATE_LIMITED"],
     ["LLM_TIMEOUT", "REVIEW_LLM_FAILED"],
     ["LLM_INVALID_RESPONSE", "REVIEW_LLM_FAILED"],
   ])(
@@ -1340,6 +1342,42 @@ describe("executeReview — a chunk whose analysis fails", () => {
       "Not reviewed because the analysis failed: `src/c.ts`.",
     );
     expect(github.postPullRequestReview).toHaveBeenCalled();
+  });
+
+  it("stops at the first chunk once the spend cap is reached", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(err("LLM_SPEND_LIMIT_REACHED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      llm,
+    );
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_REJECTED" });
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails as rate limited so the job waits before retrying", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_RATE_LIMITED")),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_LLM_RATE_LIMITED",
+    });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
   });
 
   it("stops at the first chunk when the credentials are rejected", async () => {
