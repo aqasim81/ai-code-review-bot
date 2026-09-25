@@ -1,8 +1,10 @@
 import { type Job, UnrecoverableError } from "bullmq";
 import {
+  claimJobRecord,
   createJobRecord,
   failUnfinishedJobRecord,
   findLastReviewedCommitSha,
+  type JobRecordRun,
   updateJobRecord,
 } from "@/lib/db/queries";
 import { describeError } from "@/lib/errors";
@@ -96,13 +98,32 @@ async function fetchChangedFilesForDelta(
   return changedFiles;
 }
 
-async function getOrCreateDbJobId(
+/**
+ * Claims the job record for this run, creating it on the first run. Every run
+ * gets a new run token, so an earlier run that lost its queue lock and is
+ * still going can no longer overwrite the status this run writes.
+ */
+async function claimJobRecordForRun(
   job: Job<ReviewJobData>,
-): Promise<string | null> {
+): Promise<JobRecordRun | null> {
   // Reuse the record whenever one was saved: a stalled job re-runs without
   // BullMQ counting an attempt, so attemptsMade alone is not a reliable signal.
   const existingId = job.data.dbJobId;
-  if (typeof existingId === "string") return existingId;
+  if (typeof existingId === "string") {
+    const claimResult = await claimJobRecord(existingId);
+    if (!claimResult.success) {
+      logger.error("Failed to claim job record in database", {
+        jobId: job.id,
+        dbJobId: existingId,
+        error: claimResult.error,
+      });
+      // Reviewing without the claim would leave the record without a final
+      // status, so stop before any work is done.
+      // throw-ok: BullMQ catches it and retries the job.
+      throw new Error(`Failed to claim job record: ${claimResult.error}`);
+    }
+    return claimResult.data;
+  }
 
   const { type, payload } = job.data;
   const result = await createJobRecord({
@@ -124,54 +145,59 @@ async function getOrCreateDbJobId(
     return null;
   }
 
-  const dbJobId = result.data.id;
+  const run = result.data;
   try {
-    await job.updateData({ ...job.data, dbJobId });
+    await job.updateData({ ...job.data, dbJobId: run.id });
   } catch (error) {
     // The retry cannot find this record, so it would stay PROCESSING forever.
     logger.error("Failed to save the job record ID on the job", {
       jobId: job.id,
-      dbJobId,
+      dbJobId: run.id,
       error: describeError(error),
     });
-    await markJobFailed(
-      dbJobId,
-      "JOB_RECORD_ID_NOT_SAVED",
-      job.attemptsMade + 1,
-    );
+    await markJobFailed(run, "JOB_RECORD_ID_NOT_SAVED", job.attemptsMade + 1);
     // throw-ok: BullMQ catches it and retries the job with a new record.
     throw error;
   }
-  return dbJobId;
+  return run;
 }
 
-async function markJobCompleted(dbJobId: string | null): Promise<void> {
-  if (dbJobId === null) return;
-  const result = await updateJobRecord(dbJobId, "COMPLETED");
+async function writeJobRecordStatus(
+  run: JobRecordRun | null,
+  status: "COMPLETED" | "FAILED",
+  details?: { lastError: string; attempts: number },
+): Promise<void> {
+  if (run === null) return;
+  const result = await updateJobRecord(run, status, details);
   if (!result.success) {
-    logger.warn("Failed to mark job as completed in database", {
-      dbJobId,
+    logger.warn("Failed to update job record status in database", {
+      dbJobId: run.id,
+      status,
       error: result.error,
     });
+    return;
   }
+  if (!result.data) {
+    logger.info("Job record belongs to a later run, leaving its status", {
+      dbJobId: run.id,
+      status,
+    });
+  }
+}
+
+async function markJobCompleted(run: JobRecordRun | null): Promise<void> {
+  await writeJobRecordStatus(run, "COMPLETED");
 }
 
 async function markJobFailed(
-  dbJobId: string | null,
+  run: JobRecordRun | null,
   errorCode: string,
   attemptsMade: number,
 ): Promise<void> {
-  if (dbJobId === null) return;
-  const result = await updateJobRecord(dbJobId, "FAILED", {
+  await writeJobRecordStatus(run, "FAILED", {
     lastError: errorCode,
     attempts: attemptsMade,
   });
-  if (!result.success) {
-    logger.warn("Failed to mark job as failed in database", {
-      dbJobId,
-      error: result.error,
-    });
-  }
 }
 
 /**
@@ -268,7 +294,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     attempt: job.attemptsMade + 1,
   });
 
-  const dbJobId = await getOrCreateDbJobId(job);
+  const jobRecord = await claimJobRecordForRun(job);
 
   // Jobs queued before the repository ID was added to the payload cannot be
   // matched to a repository safely; the next push or reopen queues a new one.
@@ -276,7 +302,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     logger.warn("Review job has no repository ID, skipping", {
       jobId: job.id,
     });
-    await markJobCompleted(dbJobId);
+    await markJobCompleted(jobRecord);
     return;
   }
 
@@ -292,7 +318,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
       issuesFound: result.data.issuesFound,
       processingTimeMs: result.data.processingTimeMs,
     });
-    await markJobCompleted(dbJobId);
+    await markJobCompleted(jobRecord);
     return;
   }
 
@@ -302,7 +328,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
       reason: result.error,
       commitSha: payload.commitSha,
     });
-    await markJobCompleted(dbJobId);
+    await markJobCompleted(jobRecord);
     return;
   }
 
@@ -310,7 +336,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     ...reviewJobLogContext(job.id, job.data),
     error: result.error,
   });
-  await markJobFailed(dbJobId, result.error, job.attemptsMade + 1);
+  await markJobFailed(jobRecord, result.error, job.attemptsMade + 1);
   const message = `Review failed: ${result.error}`;
   if (UNRECOVERABLE_REVIEW_ERRORS.has(result.error)) {
     throw new UnrecoverableError(message);
