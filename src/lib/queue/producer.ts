@@ -31,26 +31,48 @@ function getReviewQueue(): Queue {
   return globalForQueue.reviewQueue;
 }
 
-function buildDeterministicJobId(
-  repositoryFullName: string,
-  pullRequestNumber: number,
-  commitSha: string,
-): string {
-  return `review-${repositoryFullName}-${pullRequestNumber}-${commitSha}`;
+// The job type goes after the commit SHA: a fixed-length hex SHA keeps the
+// suffix unambiguous, while a prefix could collide with an owner such as
+// "delta-x".
+const JOB_ID_SUFFIX = {
+  "review-pr": "full",
+  "review-pr-delta": "delta",
+} as const satisfies Record<ReviewJobData["type"], string>;
+
+function buildDeterministicJobId(jobData: ReviewJobData): string {
+  const { repositoryFullName, pullRequestNumber, commitSha } = jobData.payload;
+  return `review-${repositoryFullName}-${pullRequestNumber}-${commitSha}-${JOB_ID_SUFFIX[jobData.type]}`;
+}
+
+/**
+ * BullMQ ignores `add()` while a job with the same ID is kept, which would
+ * swallow a reopen or redelivery that should reclaim a FAILED review. Only a
+ * job in the failed set is removed; a waiting, active, delayed or completed
+ * job is kept so redeliveries of the same event are still deduped.
+ */
+async function removeFailedJobWithSameId(
+  queue: Queue,
+  jobId: string,
+): Promise<void> {
+  const existingJob = await queue.getJob(jobId);
+  if (!existingJob || !(await existingJob.isFailed())) return;
+
+  await existingJob.remove();
+  logger.info("Removed failed review job so it can be re-triggered", {
+    jobId,
+  });
 }
 
 async function enqueueJob(
   jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
   const { payload } = jobData;
-  const jobId = buildDeterministicJobId(
-    payload.repositoryFullName,
-    payload.pullRequestNumber,
-    payload.commitSha,
-  );
+  const jobId = buildDeterministicJobId(jobData);
 
   try {
-    const job = await getReviewQueue().add(jobData.type, jobData, { jobId });
+    const queue = getReviewQueue();
+    await removeFailedJobWithSameId(queue, jobId);
+    const job = await queue.add(jobData.type, jobData, { jobId });
 
     logger.info("Review job enqueued", {
       jobId: job.id,
