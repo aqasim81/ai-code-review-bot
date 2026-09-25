@@ -30,6 +30,11 @@ const SEVERITIES = [
   { value: "NITPICK", label: "Everything (including nitpicks)" },
 ] as const;
 
+// null until the form is first submitted.
+type SaveState = Awaited<
+  ReturnType<typeof saveRepositorySettingsAction>
+> | null;
+
 interface SettingsFormProps {
   readonly repositoryId: string;
   readonly canManage: boolean;
@@ -58,9 +63,9 @@ export function SettingsForm({
   );
 
   async function handleSubmit(
-    _previousState: { success: boolean; error?: string },
+    _previousState: SaveState,
     formData: FormData,
-  ) {
+  ): Promise<SaveState> {
     formData.set("minimumSeverity", minimumSeverity);
     for (const pattern of excludePatterns) {
       if (pattern.value) {
@@ -70,9 +75,10 @@ export function SettingsForm({
     return await saveRepositorySettingsAction(repositoryId, formData);
   }
 
-  const [state, formAction, isPending] = useActionState(handleSubmit, {
-    success: true,
-  });
+  const [state, formAction, isPending] = useActionState<SaveState, FormData>(
+    handleSubmit,
+    null,
+  );
 
   function addExcludePattern() {
     const id = nextPatternIdRef.current;
@@ -154,9 +160,10 @@ export function SettingsForm({
             dist/**)
           </p>
           <div className="space-y-2">
-            {excludePatterns.map((pattern) => (
+            {excludePatterns.map((pattern, index) => (
               <div key={pattern.id} className="flex items-center gap-2">
                 <Input
+                  aria-label={`Exclude pattern ${index + 1}`}
                   value={pattern.value}
                   onChange={(event) =>
                     updateExcludePattern(pattern.id, event.target.value)
@@ -169,6 +176,7 @@ export function SettingsForm({
                   variant="ghost"
                   size="sm"
                   onClick={() => removeExcludePattern(pattern.id)}
+                  aria-label={`Remove exclude pattern ${index + 1}`}
                 >
                   Remove
                 </Button>
@@ -209,8 +217,15 @@ export function SettingsForm({
           />
         </div>
 
-        {!state.success && state.error && (
-          <p className="text-sm text-destructive">{state.error}</p>
+        {state && !state.success && (
+          <p role="alert" className="text-sm text-destructive">
+            {state.error}
+          </p>
+        )}
+        {state?.success && (
+          <output className="block text-sm text-muted-foreground">
+            Settings saved.
+          </output>
         )}
 
         <Button type="submit" disabled={isPending}>
