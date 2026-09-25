@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 6: Testing & Polish** — Complete. All 6 phases done. 209 tests across 15 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
+**Phase 6: Testing & Polish** — Complete. All 6 phases done. 215 tests across 15 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
 
 ## Tech Stack
 

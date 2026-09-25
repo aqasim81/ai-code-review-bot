@@ -9,6 +9,19 @@ import type { WebhookHandlerError } from "@/types/errors";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
+// Values from these fields end up in queue job IDs and API paths, so they are
+// held to GitHub's own formats rather than any non-empty string.
+const commitShaSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{40}([0-9a-f]{24})?$/,
+    "must be a 40- or 64-character hex SHA",
+  );
+
+const repositoryFullNameSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "must be owner/repo");
+
 const installationAccountSchema = z.union([
   z.object({ login: z.string().min(1), type: z.string().optional() }),
   z.object({ name: z.string().min(1), slug: z.string() }),
@@ -21,7 +34,7 @@ const installationCreatedPayloadSchema = z.object({
   }),
   sender: z.object({ login: z.string() }),
   repositories: z
-    .array(z.object({ id: z.number().int(), full_name: z.string().min(1) }))
+    .array(z.object({ id: z.number().int(), full_name: z.string() }))
     .optional(),
 });
 
@@ -34,11 +47,11 @@ const pullRequestActionSchema = z.object({ action: z.string() });
 const pullRequestEventPayloadSchema = pullRequestActionSchema.extend({
   pull_request: z.object({
     number: z.number().int().positive(),
-    head: z.object({ sha: z.string().min(1) }),
+    head: z.object({ sha: commitShaSchema }),
   }),
-  repository: z.object({ full_name: z.string().min(1) }),
+  repository: z.object({ full_name: repositoryFullNameSchema }),
   installation: z.object({ id: z.number().int() }),
-  before: z.string().optional(),
+  before: commitShaSchema.optional(),
 });
 
 function parseWebhookPayloadShape<T>(
@@ -57,6 +70,28 @@ function parseWebhookPayloadShape<T>(
     return err("INVALID_PAYLOAD");
   }
   return ok(parsed.data);
+}
+
+/**
+ * Drops (and logs) repositories whose name is not `owner/repo`, so one bad
+ * entry cannot fail the whole installation.
+ */
+function selectWellFormedRepositories(
+  repositories: readonly { id: number; full_name: string }[],
+  githubInstallationId: number,
+): { id: number; full_name: string }[] {
+  return repositories.filter((repo) => {
+    const wellFormed = repositoryFullNameSchema.safeParse(
+      repo.full_name,
+    ).success;
+    if (!wellFormed) {
+      logger.warn("Skipping repository with a malformed name", {
+        githubInstallationId,
+        githubRepoId: repo.id,
+      });
+    }
+    return wellFormed;
+  });
 }
 
 export async function handleInstallationCreated(
@@ -84,7 +119,10 @@ export async function handleInstallationCreated(
     sender: sender.login,
   });
 
-  const repositories = parsed.data.repositories ?? [];
+  const repositories = selectWellFormedRepositories(
+    parsed.data.repositories ?? [],
+    installation.id,
+  );
   const result = await createInstallationWithRepositories(
     {
       githubInstallationId: installation.id,
