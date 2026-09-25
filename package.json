@@ -18,7 +18,7 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "validate": "biome check . && tsc --noEmit && knip && vitest run --coverage",
-    "worker:dev": "tsx --tsconfig tsconfig.worker.json worker/index.ts"
+    "worker:dev": "tsx --env-file-if-exists=.env.local --tsconfig tsconfig.worker.json worker/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
