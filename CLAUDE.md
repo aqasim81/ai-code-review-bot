@@ -74,7 +74,7 @@ Webhook → Route Handler → Validate Signature → Enqueue Job (BullMQ)
 ## Testing
 
 - **Test after implementation** in a separate session — don't mix with coding sessions
-- **Unit (Vitest):** all `src/lib/` modules. **Integration (Vitest):** webhook→job, review engine e2e with mocked GitHub+LLM. **E2E (Playwright):** dashboard flows
+- **Unit (Vitest):** all `src/lib/` modules; property tests (fast-check) in `tests/unit/property/`. **Database (Vitest `db` project, `tests/db/`):** `src/lib/db/queries.ts` against a real Postgres, for what mocks can't show (NUL, integer range, unique races, guarded updates); runs in CI. **Integration (Vitest):** webhook→job, review engine e2e with mocked GitHub+LLM. **E2E (Playwright):** dashboard flows
 - **Coverage:** 80%+ on `src/lib/review/` and `src/lib/llm/` (advisory). Critical paths only for components/routes
 - Use interface-based mocks for GitHub API and LLM, `vitest.mock()` for everything else
 
@@ -92,7 +92,10 @@ pnpm knip             # Unused files, exports and dependencies (config: knip.ts)
 pnpm dev              # Dev server
 pnpm biome check --write  # Lint + format fix
 pnpm type-check       # tsc --noEmit
-pnpm test             # Vitest
+pnpm test             # Vitest unit project (no database or queue needed)
+pnpm test:db          # Queries against a real Postgres: needs `docker compose up -d postgres`,
+                      # a database named *_test (default ai_code_review_test on :5433) and
+                      # `DATABASE_URL=<test url> pnpm db:migrate`; override with TEST_DATABASE_URL
 ```
 
 ## Session Workflow
