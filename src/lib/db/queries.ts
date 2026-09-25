@@ -392,34 +392,6 @@ interface RepositoryDetail {
   readonly installationId: InstallationId;
 }
 
-export async function findRepositoryById(
-  repositoryId: RepositoryId,
-  installationId: InstallationId,
-): Promise<Result<RepositoryDetail | null, string>> {
-  try {
-    const repo = await prisma.repository.findFirst({
-      where: { id: repositoryId, installationId },
-      select: {
-        id: true,
-        fullName: true,
-        isEnabled: true,
-        settings: true,
-        installationId: true,
-      },
-    });
-    if (!repo) return ok(null);
-    return ok({
-      ...repo,
-      id: repo.id as RepositoryId,
-      installationId: repo.installationId as InstallationId,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find repository: ${message}`);
-  }
-}
-
 export async function findRepositoryByIdForInstallations(
   repositoryId: RepositoryId,
   installationIds: readonly InstallationId[],
@@ -587,65 +559,6 @@ interface ReviewDetailResult {
     readonly suggestion: string | null;
     readonly confidence: number;
   }>;
-}
-
-export async function getReviewWithComments(
-  reviewId: ReviewId,
-  installationId: InstallationId,
-): Promise<Result<ReviewDetailResult | null, string>> {
-  try {
-    const review = await prisma.review.findFirst({
-      where: {
-        id: reviewId,
-        repository: { installationId },
-      },
-      select: {
-        id: true,
-        pullRequestNumber: true,
-        commitSha: true,
-        status: true,
-        summary: true,
-        issuesFound: true,
-        processingTimeMs: true,
-        createdAt: true,
-        completedAt: true,
-        repository: { select: { fullName: true } },
-        comments: {
-          select: {
-            id: true,
-            filePath: true,
-            lineNumber: true,
-            category: true,
-            severity: true,
-            message: true,
-            suggestion: true,
-            confidence: true,
-          },
-          orderBy: [{ filePath: "asc" }, { lineNumber: "asc" }],
-        },
-      },
-    });
-
-    if (!review) return ok(null);
-
-    return ok({
-      id: review.id as ReviewId,
-      repositoryFullName: review.repository.fullName,
-      pullRequestNumber: review.pullRequestNumber,
-      commitSha: review.commitSha,
-      status: review.status,
-      summary: review.summary,
-      issuesFound: review.issuesFound,
-      processingTimeMs: review.processingTimeMs,
-      createdAt: review.createdAt,
-      completedAt: review.completedAt,
-      comments: review.comments,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to get review details: ${message}`);
-  }
 }
 
 export async function getReviewWithCommentsForInstallations(
