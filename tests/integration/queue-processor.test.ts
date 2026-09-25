@@ -45,6 +45,7 @@ function createMockJob(
         commitSha: "abc123",
       },
     },
+    opts: { attempts: 3 },
     updateData: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as Job<ReviewJobData>;
@@ -66,6 +67,7 @@ function createDeltaJob(
         commitSha: "abc123",
       },
     },
+    opts: { attempts: 3 },
     updateData: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as Job<ReviewJobData>;
@@ -437,6 +439,23 @@ describe("processReviewJob", () => {
     );
     expect(executeReview).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [0, false],
+    [1, false],
+    [2, true],
+  ])(
+    "tells the engine whether attempt %i of 3 is the final one",
+    async (attemptsMade, isFinalAttempt) => {
+      await processReviewJob(createMockJob({ attemptsMade }));
+
+      expect(executeReview).toHaveBeenCalledWith(
+        expect.objectContaining({ isFinalAttempt }),
+        expect.anything(),
+        expect.anything(),
+      );
+    },
+  );
 
   it("handles DB job record creation failure gracefully", async () => {
     vi.mocked(createJobRecord).mockResolvedValue(err("DB error"));

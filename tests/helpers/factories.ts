@@ -214,6 +214,7 @@ export function createReviewRequest(
     pullRequestNumber: 42,
     commitSha: "abc123def456",
     jobId: "job-1",
+    isFinalAttempt: false,
     ...overrides,
   };
 }

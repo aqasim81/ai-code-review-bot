@@ -228,6 +228,7 @@ async function buildReviewRequest(
     pullRequestNumber: payload.pullRequestNumber,
     commitSha: payload.commitSha,
     jobId,
+    isFinalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
   };
 
   if (type !== "review-pr-delta") return baseRequest;

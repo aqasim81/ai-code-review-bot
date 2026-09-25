@@ -1156,6 +1156,127 @@ describe("executeReview — review pipeline", () => {
   });
 });
 
+describe("executeReview — a chunk whose analysis fails", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithThreeChunks() {
+    return createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            `${largeAddedFileDiff("src/a.ts")}${largeAddedFileDiff("src/b.ts")}${largeAddedFileDiff("src/c.ts")}`,
+          ),
+        ),
+    });
+  }
+
+  it("posts the other chunks' findings and names the files a rejected chunk left unreviewed", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_CONTEXT_TOO_LONG"))
+        .mockResolvedValueOnce(ok(createReviewResult())),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+    const body = vi.mocked(github.postPullRequestReview).mock.calls[0]?.[3]
+      .body;
+    expect(body).toContain(
+      "Not reviewed because the analysis failed: `src/b.ts`.",
+    );
+    expect(body).toContain("Found 2 issues in this review.");
+    expect(markReviewCompleted).toHaveBeenCalled();
+  });
+
+  it("still fails the review when every chunk fails", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_TIMEOUT")),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_FAILED" });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+  });
+
+  it("fails the review so the job retries when a chunk fails with an error a retry can fix", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_TIMEOUT"))
+        .mockResolvedValueOnce(ok(createReviewResult())),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_FAILED" });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+  });
+
+  it("goes on without a chunk that keeps failing on the job's final attempt", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_INVALID_RESPONSE")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      llm,
+    );
+
+    expect(result.success && result.data.summary).toContain(
+      "Not reviewed because the analysis failed: `src/c.ts`.",
+    );
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+  });
+
+  it("stops at the first chunk when the credentials are rejected", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_AUTH_FAILED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      llm,
+    );
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_REJECTED" });
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the review as rejected when every chunk is rejected", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockResolvedValue(err("LLM_BAD_REQUEST")),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result).toEqual({ success: false, error: "REVIEW_LLM_REJECTED" });
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(3);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+  });
+});
+
 describe("executeReview — superseded commits", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -267,11 +267,18 @@ function reviewErrorForGitHubFailure(
   return GITHUB_STEP_ERRORS[step].retryable;
 }
 
+// The model refused the request itself; no retry can fix it.
 const REJECTED_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
   "LLM_API_KEY_MISSING",
   "LLM_AUTH_FAILED",
   "LLM_BAD_REQUEST",
   "LLM_CONTEXT_TOO_LONG",
+]);
+
+// Rejections that fail every chunk alike, so there is no point going on.
+const CREDENTIAL_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
+  "LLM_API_KEY_MISSING",
+  "LLM_AUTH_FAILED",
 ]);
 
 async function fetchAndParseDiff(
@@ -415,19 +422,25 @@ interface LlmAnalysisResult {
   readonly findings: ReviewFinding[];
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
+  /** Files of chunks whose analysis failed while the rest succeeded. */
+  readonly unanalyzedFilePaths: readonly string[];
 }
 
-const MAX_LISTED_OVERSIZED_FILES = 10;
+const MAX_LISTED_FILES = 10;
 
-function describeOversizedFiles(filePaths: readonly string[]): string | null {
+/** A summary note naming skipped files, or null when there are none. */
+function describeSkippedFiles(
+  reason: string,
+  filePaths: readonly string[],
+): string | null {
   if (filePaths.length === 0) return null;
   const listed = filePaths
-    .slice(0, MAX_LISTED_OVERSIZED_FILES)
+    .slice(0, MAX_LISTED_FILES)
     .map((filePath) => `\`${filePath}\``)
     .join(", ");
-  const more = filePaths.length - MAX_LISTED_OVERSIZED_FILES;
+  const more = filePaths.length - MAX_LISTED_FILES;
   const suffix = more > 0 ? ` and ${more} more` : "";
-  return `Not reviewed because they are too large: ${listed}${suffix}.`;
+  return `${reason}: ${listed}${suffix}.`;
 }
 
 function describeFindingCount(findingCount: number): string {
@@ -435,12 +448,39 @@ function describeFindingCount(findingCount: number): string {
   return `Found ${findingCount} issue${findingCount === 1 ? "" : "s"} in this review.`;
 }
 
+function llmAnalysisFailed(
+  errors: readonly LLMError[],
+): Result<never, StepFailure> {
+  return stepFailed(
+    errors.every((error) => REJECTED_LLM_ERRORS.has(error))
+      ? "REVIEW_LLM_REJECTED"
+      : "REVIEW_LLM_FAILED",
+    "LLM analysis failed",
+  );
+}
+
+/**
+ * Whether the review should stop at a failed chunk rather than go on without
+ * it: the credentials are bad (every chunk fails alike), or a retry of the
+ * whole job may still succeed.
+ */
+function shouldStopAtFailedChunk(
+  error: LLMError,
+  isFinalAttempt: boolean,
+): boolean {
+  if (CREDENTIAL_LLM_ERRORS.has(error)) return true;
+  return !REJECTED_LLM_ERRORS.has(error) && !isFinalAttempt;
+}
+
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
   customInstructions: string,
+  isFinalAttempt: boolean,
 ): Promise<Result<LlmAnalysisResult, StepFailure>> {
   const allFindings: ReviewFinding[] = [];
+  const failedChunkErrors: LLMError[] = [];
+  const unanalyzedFilePaths: string[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -450,16 +490,17 @@ async function analyzeAllChunks(
       customInstructions,
     );
     if (!result.success) {
+      const filePaths = chunk.files.map((file) => file.filePath);
       logger.error("LLM analysis failed for chunk", {
         error: result.error,
-        fileCount: chunk.files.length,
+        filePaths,
       });
-      return stepFailed(
-        REJECTED_LLM_ERRORS.has(result.error)
-          ? "REVIEW_LLM_REJECTED"
-          : "REVIEW_LLM_FAILED",
-        "LLM analysis failed",
-      );
+      if (shouldStopAtFailedChunk(result.error, isFinalAttempt)) {
+        return llmAnalysisFailed([result.error]);
+      }
+      failedChunkErrors.push(result.error);
+      unanalyzedFilePaths.push(...filePaths);
+      continue;
     }
 
     allFindings.push(...result.data.findings);
@@ -467,10 +508,14 @@ async function analyzeAllChunks(
     totalOutputTokens += result.data.tokenUsage.outputTokens;
   }
 
+  if (failedChunkErrors.length === chunks.length) {
+    return llmAnalysisFailed(failedChunkErrors);
+  }
   return ok({
     findings: allFindings,
     totalInputTokens,
     totalOutputTokens,
+    unanalyzedFilePaths,
   });
 }
 
@@ -788,7 +833,10 @@ async function runReviewSteps(
     repo,
     request.commitSha,
   );
-  const oversizedNote = describeOversizedFiles(oversizedFilePaths);
+  const oversizedNote = describeSkippedFiles(
+    "Not reviewed because they are too large",
+    oversizedFilePaths,
+  );
   if (chunks.length === 0) {
     return completeReviewEarly(
       claim,
@@ -813,13 +861,21 @@ async function analyzeSaveAndPostReview(
     llmService,
     chunks,
     settings.customInstructions,
+    request.isFinalAttempt,
   );
   if (!llmResult.success) return llmResult;
   const findings = filterFindingsBySettings(llmResult.data.findings, settings);
-  const findingCountText = describeFindingCount(findings.length);
-  const summary = oversizedNote
-    ? `${findingCountText}\n\n${oversizedNote}`
-    : findingCountText;
+  const failedAnalysisNote = describeSkippedFiles(
+    "Not reviewed because the analysis failed",
+    llmResult.data.unanalyzedFilePaths,
+  );
+  const summary = [
+    describeFindingCount(findings.length),
+    oversizedNote,
+    failedAnalysisNote,
+  ]
+    .filter((note) => note !== null)
+    .join("\n\n");
 
   logger.info("LLM analysis complete", {
     jobId: request.jobId,
