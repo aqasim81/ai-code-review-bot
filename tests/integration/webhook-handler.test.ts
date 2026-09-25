@@ -152,6 +152,67 @@ describe("handleInstallationCreated", () => {
       [],
     );
   });
+
+  it("records an account with a login but no type as USER", async () => {
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 0 }),
+    );
+
+    await handleInstallationCreated(
+      createPayload({
+        installation: { id: 12345, account: { login: "someone" } },
+        repositories: [],
+      }),
+    );
+
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      expect.objectContaining({
+        githubAccountLogin: "someone",
+        githubAccountType: "USER",
+      }),
+      [],
+    );
+  });
+
+  it("rejects an Enterprise account with an empty slug", async () => {
+    const result = await handleInstallationCreated(
+      createPayload({
+        installation: {
+          id: 12345,
+          account: { name: "Acme Corporation", slug: "" },
+        },
+        repositories: [],
+      }),
+    );
+
+    expect(result).toEqual({ success: false, error: "INVALID_PAYLOAD" });
+    expect(createInstallationWithRepositories).not.toHaveBeenCalled();
+  });
+
+  it("records an Enterprise installation as ENTERPRISE, using its slug as the login", async () => {
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 0 }),
+    );
+
+    await handleInstallationCreated(
+      createPayload({
+        installation: {
+          id: 12345,
+          account: { name: "Acme Corporation", slug: "acme" },
+        },
+        repositories: [],
+      }),
+    );
+
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      {
+        githubInstallationId: 12345,
+        githubAccountLogin: "acme",
+        githubAccountType: "ENTERPRISE",
+      },
+      [],
+    );
+  });
 });
 
 describe("handleInstallationDeleted", () => {
