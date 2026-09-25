@@ -13,9 +13,11 @@ import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type { ReviewChunk, ReviewResult } from "@/types/review";
 
-const DEFAULT_MODEL_ID = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+// The model thinks by default and its thinking counts toward this limit, so it
+// leaves room for thinking plus the JSON reply while staying under the SDK's
+// limit for requests that are not streamed.
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
 const BASE_RETRY_DELAY_MS = 1000;
 
 interface LlmClientOptions {
@@ -28,7 +30,7 @@ interface LlmClientOptions {
 
 export function createLlmClient(options?: LlmClientOptions): LLMService {
   const apiKey = options?.apiKey ?? env.ANTHROPIC_API_KEY;
-  const modelId = options?.modelId ?? DEFAULT_MODEL_ID;
+  const modelId = options?.modelId ?? env.LLM_MODEL_ID;
   const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
   const confidenceThreshold =
     options?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
