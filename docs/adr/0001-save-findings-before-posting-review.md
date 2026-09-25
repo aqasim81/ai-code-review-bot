@@ -67,13 +67,20 @@ retryable with the old order would have allowed a retry to post the same comment
   stale cutoff, and the two attempts would then have to reach the post within seconds of each
   other.
 - The worker runs a sweep (`expireStaleReviews`, at startup and every 5 minutes) that marks
-  reviews unfinished past the 30-minute cutoff as FAILED. It drops their unposted findings and
+  reviews unfinished past the 30-minute cutoff as FAILED. It drops their saved findings and
   clears their claim token, so an attempt that is somehow still running can no longer write.
   Each expiry is a guarded, per-review update, so a review reclaimed at the same moment is left
   alone and running the sweep in several workers is safe. *(Added for #30.)*
+- Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
+  commit is still recorded as completed and skipped; the sweep only marks the review FAILED once
+  it passes the cutoff.
 - Known gap: an expired review is not re-run automatically. The dashboard shows it as FAILED, and
-  the next trigger for that commit (a push or reopen) reclaims it. Re-enqueueing from the sweep
-  was left out to avoid retrying a review that keeps crashing the worker in a loop.
+  a reopen or webhook redelivery for the same commit reclaims it. A push creates a new head
+  commit, and so a new review. Re-enqueueing from the sweep was left out to avoid retrying a
+  review that keeps crashing the worker in a loop.
+- Known gap: an attempt that passes its pre-post claim check, posts, and is expired before it
+  completes leaves the review FAILED with its findings deleted, although the review is on the
+  PR. If the review is reclaimed later, the posted-review marker check stops a repost.
 - `githubCommentId` on review comments is still never filled in.
 
 ## Alternatives considered

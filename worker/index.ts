@@ -16,8 +16,19 @@ const STALE_REVIEW_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * run in every worker: each expiry is a guarded, per-review update.
  */
 function startStaleReviewSweep(): NodeJS.Timeout {
+  let sweepInProgress = false;
   const sweep = (): void => {
-    void expireStaleReviews();
+    if (sweepInProgress) return;
+    sweepInProgress = true;
+    expireStaleReviews()
+      .catch((error: unknown) => {
+        logger.error("Stale review sweep crashed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        sweepInProgress = false;
+      });
   };
   sweep();
   return setInterval(sweep, STALE_REVIEW_SWEEP_INTERVAL_MS);
