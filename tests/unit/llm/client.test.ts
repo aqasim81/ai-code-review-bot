@@ -68,6 +68,7 @@ vi.mock("@/lib/llm/prompts", () => ({
 }));
 
 vi.mock("@/lib/llm/parser", () => ({
+  DEFAULT_CONFIDENCE_THRESHOLD: 0.7,
   parseLlmReviewResponse: vi.fn().mockReturnValue({
     success: true,
     data: [createReviewFinding()],

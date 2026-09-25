@@ -1,6 +1,7 @@
 import LlmSdk from "@anthropic-ai/sdk";
 import { env } from "@/lib/env";
 import {
+  DEFAULT_CONFIDENCE_THRESHOLD,
   parseLlmReviewResponse,
   parseTruncatedLlmReviewResponse,
 } from "@/lib/llm/parser";
@@ -14,7 +15,6 @@ import type { ReviewChunk, ReviewResult } from "@/types/review";
 
 const DEFAULT_MODEL_ID = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const BASE_RETRY_DELAY_MS = 1000;
 
