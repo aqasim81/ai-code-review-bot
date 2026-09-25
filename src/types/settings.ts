@@ -28,6 +28,14 @@ const DEFAULT_REPOSITORY_SETTINGS: Required<RepositorySettings> = {
   customInstructions: "",
 } as const;
 
+// Postgres jsonb rejects NUL, so a setting containing one could never be saved.
+const settingsTextSchema = z
+  .string()
+  .refine(
+    (value) => !value.includes("\u0000"),
+    "Settings can't contain NUL characters",
+  );
+
 export const repositorySettingsSchema = z.object({
   enabledCategories: z
     .array(
@@ -35,8 +43,8 @@ export const repositorySettingsSchema = z.object({
     )
     .min(1, "At least one category must be enabled"),
   minimumSeverity: z.enum(["CRITICAL", "WARNING", "SUGGESTION", "NITPICK"]),
-  excludePatterns: z.array(z.string().max(200)).max(20),
-  customInstructions: z.string().max(2000),
+  excludePatterns: z.array(settingsTextSchema.max(200)).max(20),
+  customInstructions: settingsTextSchema.max(2000),
 });
 
 export type RepositorySettingsInput = z.infer<typeof repositorySettingsSchema>;
