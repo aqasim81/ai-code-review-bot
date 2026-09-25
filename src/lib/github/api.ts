@@ -237,6 +237,10 @@ function createGitHubService(
         if (Array.isArray(data) || data.type !== "file") {
           return err("GITHUB_NOT_FOUND");
         }
+        // For files over 1 MB GitHub returns encoding "none" and no content.
+        if (data.encoding !== "base64") {
+          return err("GITHUB_CONTENT_TOO_LARGE");
+        }
 
         const content = Buffer.from(data.content, "base64").toString("utf-8");
         return ok(content);

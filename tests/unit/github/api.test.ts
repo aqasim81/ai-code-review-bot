@@ -6,6 +6,7 @@ const octokitMocks = vi.hoisted(() => ({
   rateLimitGet: vi.fn(),
   paginate: vi.fn(),
   listReviews: vi.fn(),
+  getContent: vi.fn(),
 }));
 
 vi.mock("@octokit/rest", () => ({
@@ -16,6 +17,7 @@ vi.mock("@octokit/rest", () => ({
     };
     rateLimit = { get: octokitMocks.rateLimitGet };
     pulls = { listReviews: octokitMocks.listReviews };
+    repos = { getContent: octokitMocks.getContent };
     paginate = octokitMocks.paginate;
   },
 }));
@@ -108,5 +110,56 @@ describe("findPostedReview", () => {
     );
 
     expect(result).toEqual({ success: false, error: "GITHUB_UNKNOWN_ERROR" });
+  });
+});
+
+describe("fetchFileContent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    octokitMocks.createInstallationAccessToken.mockResolvedValue({
+      data: { token: "installation-token" },
+    });
+    octokitMocks.rateLimitGet.mockResolvedValue({
+      data: { resources: { core: { remaining: 5000, reset: 0 } } },
+    });
+  });
+
+  it("decodes base64 file content", async () => {
+    octokitMocks.getContent.mockResolvedValue({
+      data: {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from("const a = 1;\n").toString("base64"),
+      },
+    });
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).fetchFileContent(
+      "owner",
+      "repo",
+      "src/a.ts",
+      "sha",
+    );
+
+    expect(result).toEqual({ success: true, data: "const a = 1;\n" });
+  });
+
+  it("returns an error instead of an empty file when GitHub omits content over 1 MB", async () => {
+    octokitMocks.getContent.mockResolvedValue({
+      data: { type: "file", encoding: "none", content: "" },
+    });
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).fetchFileContent(
+      "owner",
+      "repo",
+      "fixtures/huge.json",
+      "sha",
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "GITHUB_CONTENT_TOO_LARGE",
+    });
   });
 });
