@@ -100,6 +100,14 @@ function isValidLineNumber(value: unknown): value is number {
   );
 }
 
+// Postgres text columns reject NUL, so one in a finding would fail the whole
+// review's save.
+const NUL = "\u0000";
+
+function withoutNulCharacters(value: unknown): string | null {
+  return typeof value === "string" ? value.replaceAll(NUL, "") : null;
+}
+
 function validateFinding(raw: unknown): ReviewFinding | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -107,10 +115,14 @@ function validateFinding(raw: unknown): ReviewFinding | null {
 
   const obj = raw as Record<string, unknown>;
 
-  const filePath = typeof obj.filePath === "string" ? obj.filePath : null;
+  // A path with a NUL character cannot match a real file.
+  const filePath =
+    typeof obj.filePath === "string" && !obj.filePath.includes(NUL)
+      ? obj.filePath
+      : null;
   const lineNumber = isValidLineNumber(obj.lineNumber) ? obj.lineNumber : null;
-  const message = typeof obj.message === "string" ? obj.message : null;
-  const suggestion = typeof obj.suggestion === "string" ? obj.suggestion : null;
+  const message = withoutNulCharacters(obj.message);
+  const suggestion = withoutNulCharacters(obj.suggestion);
   const confidence =
     typeof obj.confidence === "number" &&
     obj.confidence >= 0 &&
