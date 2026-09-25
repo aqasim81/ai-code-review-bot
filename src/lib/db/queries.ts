@@ -297,15 +297,16 @@ interface ClaimExistingReviewInput {
 }
 
 /**
- * An unfinished review whose processing started before `staleBefore`. Rows
- * from before start times were recorded fall back to `createdAt`.
+ * An unfinished review whose claim was last renewed before `staleBefore`: its
+ * owner stopped working on it. Rows from before claims were recorded fall back
+ * to `createdAt`.
  */
 function staleReviewFilter(staleBefore: Date) {
   return {
     status: { in: ["PROCESSING" as const, "PENDING" as const] },
     OR: [
-      { processingStartedAt: { lt: staleBefore } },
-      { processingStartedAt: null, createdAt: { lt: staleBefore } },
+      { claimRenewedAt: { lt: staleBefore } },
+      { claimRenewedAt: null, createdAt: { lt: staleBefore } },
     ],
   };
 }
@@ -397,7 +398,7 @@ export async function claimExistingReview(
         status: "PROCESSING",
         claimedByJobId: claim.jobId,
         claimToken,
-        processingStartedAt: new Date(),
+        claimRenewedAt: new Date(),
         pullRequestNumber: claim.pullRequestNumber,
         summary: null,
         issuesFound: 0,
@@ -444,7 +445,7 @@ export async function createReviewRecord(
         status: "PROCESSING",
         claimedByJobId: input.claimedByJobId,
         claimToken,
-        processingStartedAt: new Date(),
+        claimRenewedAt: new Date(),
       },
     });
     return ok({ reviewId: review.id as ReviewId, claimToken });
@@ -512,6 +513,23 @@ export async function isReviewClaimCurrent(
   return runQuery("Failed to check review claim", async () => {
     const count = await prisma.review.count({
       where: currentClaimFilter(claim),
+    });
+    return ok(count > 0);
+  });
+}
+
+/**
+ * Records that the attempt holding the claim is still working, so the review
+ * does not become stale. Returns false (and writes nothing) when the claim was
+ * lost.
+ */
+export async function renewReviewClaim(
+  claim: ReviewClaimRef,
+): Promise<Result<boolean, string>> {
+  return runQuery("Failed to renew review claim", async () => {
+    const { count } = await prisma.review.updateMany({
+      where: currentClaimFilter(claim),
+      data: { claimRenewedAt: new Date() },
     });
     return ok(count > 0);
   });

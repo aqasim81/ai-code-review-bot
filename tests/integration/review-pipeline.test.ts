@@ -23,6 +23,7 @@ import {
   isReviewClaimCurrent,
   markReviewCompleted,
   markReviewSuperseded,
+  renewReviewClaim,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
@@ -82,6 +83,7 @@ function setupSuccessfulDbMocks() {
     ok({ reviewId: id, claimToken: "retry-token" }),
   );
   vi.mocked(failReview).mockResolvedValue(ok(true));
+  vi.mocked(renewReviewClaim).mockResolvedValue(ok(true));
   vi.mocked(initializeAstParser).mockResolvedValue(ok(undefined));
   vi.mocked(parseFileAst).mockResolvedValue(
     ok({
@@ -138,6 +140,39 @@ describe("executeReview — review pipeline", () => {
       NEW_REVIEW_CLAIM,
       expect.any(Number),
     );
+  });
+
+  it("renews the claim while a slow review runs and stops once it ends (#114)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let finishModelCall: () => void = () => {};
+      const llm = createMockLlmService({
+        analyzeReviewChunk: vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            finishModelCall = resolve;
+          });
+          return ok(createReviewResult());
+        }),
+      });
+      const github = createMockGitHubService({
+        fetchPullRequestDiff: vi
+          .fn()
+          .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      });
+
+      const review = executeReview(createReviewRequest(), github, llm);
+      await vi.waitFor(() => expect(llm.analyzeReviewChunk).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+      expect(renewReviewClaim).toHaveBeenCalledTimes(8);
+      expect(renewReviewClaim).toHaveBeenCalledWith(NEW_REVIEW_CLAIM);
+
+      finishModelCall();
+      expect((await review).success).toBe(true);
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+      expect(renewReviewClaim).toHaveBeenCalledTimes(8);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns REVIEW_ALREADY_EXISTS for a COMPLETED review without claiming it", async () => {

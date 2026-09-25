@@ -21,7 +21,7 @@ retryable with the old order would have allowed a retry to post the same comment
   (a single-row update).
 - `claimReviewRecord` handles an existing review for the same commit:
   - none → create a PROCESSING review, recording the queue job ID (`claimedByJobId`) and
-    `processingStartedAt`. If another job creates it first, the insert hits the
+    `processingStartedAt` (renamed `claimRenewedAt` in #114). If another job creates it first, the insert hits the
     `(repositoryId, commitSha)` unique key; `createReviewRecord` maps Prisma's `P2002` to "already
     exists" and the job returns `REVIEW_ALREADY_EXISTS` instead of a database error (#24). The
     losing job does not re-check whether the winner's review has since become claimable; if the
@@ -29,7 +29,7 @@ retryable with the old order would have allowed a retry to post the same comment
   - COMPLETED → `REVIEW_ALREADY_EXISTS`;
   - otherwise → `claimExistingReview` tries to take it over, in one transaction. The update is
     guarded so that it succeeds only when the review is FAILED; or PROCESSING under the same
-    job ID; or PROCESSING or PENDING and started more than 30 minutes ago. It then records the
+    job ID; or PROCESSING or PENDING with its claim not renewed for 30 minutes (before #114: started more than 30 minutes ago). It then records the
     new job and start time and the retrying job's pull request number, and clears old
     comments. If the claim does not match, another job owns the review → `REVIEW_ALREADY_EXISTS`.
     *(Added for #23.)* Job IDs are deterministic per repository, PR, commit and job type (full or
@@ -74,6 +74,10 @@ retryable with the old order would have allowed a retry to post the same comment
 - The worker runs a sweep (`expireStaleReviews`, at startup and every 5 minutes) that marks
   reviews unfinished past the 30-minute cutoff as FAILED. It drops their saved findings and
   clears their claim token, so an attempt that is somehow still running can no longer write.
+  *(Changed for #114.)* The attempt holding the claim renews `claimRenewedAt` every 5 minutes
+  while it runs (`renewReviewClaim`), so the cutoff measures time since the owner last showed it
+  was alive, not time since the review started. A large pull request or a slow model can take
+  longer than 30 minutes without being expired; only an attempt that died or hung is.
   Each expiry is a guarded, per-review update, so a review reclaimed at the same moment is left
   alone and running the sweep in several workers is safe. *(Added for #30.)*
 - Known gap: if the owning job is dead but the review is not yet stale, a new job for the same

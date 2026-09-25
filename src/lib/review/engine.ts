@@ -8,10 +8,12 @@ import {
   isReviewClaimCurrent,
   markReviewCompleted,
   markReviewSuperseded,
+  renewReviewClaim,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { describeError } from "@/lib/errors";
 import { buildReviewMarker } from "@/lib/github/review-marker";
+import { startHeartbeat } from "@/lib/heartbeat";
 import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
@@ -28,7 +30,10 @@ import {
   createExcludedPathMatcher,
   filterFindingsBySettings,
 } from "@/lib/review/settings-filter";
-import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
+import {
+  REVIEW_CLAIM_RENEWAL_INTERVAL_MS,
+  STALE_PROCESSING_REVIEW_MS,
+} from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
 import type { GitHubError, ReviewEngineError } from "@/types/errors";
 import type { GitHubService, PullRequestReviewPayload } from "@/types/github";
@@ -935,9 +940,30 @@ async function analyzeSaveAndPostReview(
   });
 }
 
+/**
+ * Renews the claim while the review runs, so a slow review (a large pull
+ * request or a slow model) is never taken for an abandoned one and expired.
+ */
+function keepReviewClaimAlive(claim: ReviewClaimRef): () => void {
+  return startHeartbeat(
+    "review-claim",
+    async () => {
+      const renewResult = await renewReviewClaim(claim);
+      if (!renewResult.success) {
+        logger.warn("Failed to renew review claim", {
+          reviewId: claim.reviewId,
+          error: renewResult.error,
+        });
+      }
+    },
+    REVIEW_CLAIM_RENEWAL_INTERVAL_MS,
+  );
+}
+
 async function runReviewStepsWithFailureGuard(
   context: ReviewStepsContext,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+  const stopRenewingClaim = keepReviewClaimAlive(context.claim);
   try {
     const result = await runReviewSteps(context);
     if (result.success) return result;
@@ -954,6 +980,8 @@ async function runReviewStepsWithFailureGuard(
     });
     await markReviewFailed(context.claim, "Unexpected error during review");
     return err("REVIEW_UNEXPECTED_ERROR");
+  } finally {
+    stopRenewingClaim();
   }
 }
 
