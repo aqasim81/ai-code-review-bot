@@ -14,9 +14,6 @@ const prismaMock = vi.hoisted(() => ({
     aggregate: vi.fn(),
   },
   reviewComment: { groupBy: vi.fn() },
-  $transaction: vi.fn((operations: Promise<unknown>[]) =>
-    Promise.all(operations),
-  ),
 }));
 
 vi.mock("@/lib/db/prisma-client", () => ({ prisma: prismaMock }));
@@ -69,6 +66,7 @@ describe("dashboard queries are limited to the user's access scope", () => {
     prismaMock.review.findFirst.mockResolvedValue(null);
     prismaMock.review.count.mockResolvedValue(0);
     prismaMock.review.aggregate.mockResolvedValue({
+      _count: { _all: 0 },
       _sum: { issuesFound: 0 },
     });
     prismaMock.reviewComment.groupBy.mockResolvedValue([]);
@@ -194,7 +192,7 @@ describe("dashboard queries are limited to the user's access scope", () => {
     for (const call of prismaMock.review.count.mock.calls) {
       expect(call[0]?.where?.repository).toEqual(IN_SCOPE);
     }
-    expect(prismaMock.review.count).toHaveBeenCalledTimes(2);
+    expect(prismaMock.review.count).toHaveBeenCalledTimes(1);
     expect(whereOf(prismaMock.review.aggregate)).toEqual({
       repository: IN_SCOPE,
     });

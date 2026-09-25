@@ -10,6 +10,7 @@ import type {
   JobStatus,
   ReviewStatus,
 } from "@/generated/prisma/enums";
+import { describeError } from "@/lib/errors";
 import type { AccessScope } from "@/types/access";
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
@@ -17,6 +18,24 @@ import { err, ok } from "@/types/results";
 import type { ReviewClaimRef } from "@/types/review";
 import type { RepositorySettingsInput } from "@/types/settings";
 import { prisma } from "./prisma-client";
+
+function databaseError(failurePrefix: string, error: unknown) {
+  return err(
+    `${failurePrefix}: ${describeError(error, "Unknown database error")}`,
+  );
+}
+
+/** Runs a query and turns anything it throws into an error Result. */
+async function runQuery<T>(
+  failurePrefix: string,
+  query: () => Promise<Result<T, string>>,
+): Promise<Result<T, string>> {
+  try {
+    return await query();
+  } catch (error) {
+    return databaseError(failurePrefix, error);
+  }
+}
 
 interface CreateInstallationInput {
   githubInstallationId: number;
@@ -64,16 +83,12 @@ export async function createInstallationWithRepositories(
   installation: CreateInstallationInput,
   repositories: CreateRepositoryInput[],
 ): Promise<Result<{ id: InstallationId; repositoryCount: number }, string>> {
-  try {
+  return runQuery("Failed to save installation and repositories", async () => {
     const id = await saveInstallationRepositories(installation, repositories, {
       reactivate: true,
     });
     return ok({ id, repositoryCount: repositories.length });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to save installation and repositories: ${message}`);
-  }
+  });
 }
 
 /**
@@ -85,16 +100,12 @@ export async function addRepositoriesToInstallation(
   installation: CreateInstallationInput,
   repositories: readonly CreateRepositoryInput[],
 ): Promise<Result<{ repositoryCount: number }, string>> {
-  try {
+  return runQuery("Failed to add repositories", async () => {
     await saveInstallationRepositories(installation, repositories, {
       reactivate: false,
     });
     return ok({ repositoryCount: repositories.length });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to add repositories: ${message}`);
-  }
+  });
 }
 
 /**
@@ -106,7 +117,7 @@ export async function removeRepositoriesFromInstallation(
   githubInstallationId: number,
   githubRepoIds: readonly number[],
 ): Promise<Result<{ removedCount: number }, string>> {
-  try {
+  return runQuery("Failed to remove repositories", async () => {
     const { count } = await prisma.repository.updateMany({
       where: {
         githubRepoId: { in: [...githubRepoIds] },
@@ -116,11 +127,7 @@ export async function removeRepositoriesFromInstallation(
       data: { removedAt: new Date() },
     });
     return ok({ removedCount: count });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to remove repositories: ${message}`);
-  }
+  });
 }
 
 /** Suspends or resumes an installation; a deleted installation stays deleted. */
@@ -128,17 +135,13 @@ export async function setInstallationSuspended(
   githubInstallationId: number,
   suspended: boolean,
 ): Promise<Result<void, string>> {
-  try {
+  return runQuery("Failed to update installation status", async () => {
     await prisma.installation.updateMany({
       where: { githubInstallationId, status: { not: "DELETED" } },
       data: { status: suspended ? "SUSPENDED" : "ACTIVE" },
     });
     return ok(undefined);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to update installation status: ${message}`);
-  }
+  });
 }
 
 // --- Review queries ---
@@ -169,29 +172,25 @@ const REVIEW_REPOSITORY_SELECT = {
 export async function findOrCreateRepositoryForReview(
   input: RepositoryForReviewInput,
 ): Promise<Result<RepositoryForReview | null, string>> {
-  try {
-    const installation = await prisma.installation.findUnique({
-      where: { githubInstallationId: input.githubInstallationId },
-      select: { id: true, status: true },
-    });
-    if (!installation || installation.status !== "ACTIVE") return ok(null);
-
-    const key = {
-      installationId_githubRepoId: {
-        installationId: installation.id,
+  return runQuery("Failed to find repository", async () => {
+    const found = await prisma.repository.findFirst({
+      where: {
         githubRepoId: input.githubRepoId,
+        installation: { githubInstallationId: input.githubInstallationId },
       },
-    };
-    const existing =
-      (await prisma.repository.findUnique({
-        where: key,
-        select: REVIEW_REPOSITORY_SELECT,
-      })) ?? (await createRepositoryForReview(installation.id, input));
+      select: {
+        ...REVIEW_REPOSITORY_SELECT,
+        installation: { select: { status: true } },
+      },
+    });
+    if (found && found.installation.status !== "ACTIVE") return ok(null);
+
+    const existing = found ?? (await createRepositoryForReview(input));
     if (!existing || existing.removedAt) return ok(null);
 
     if (existing.fullName !== input.fullName) {
       await prisma.repository.update({
-        where: key,
+        where: { id: existing.id },
         data: { fullName: input.fullName },
       });
     }
@@ -199,23 +198,24 @@ export async function findOrCreateRepositoryForReview(
       id: existing.id as RepositoryId,
       isEnabled: existing.isEnabled,
     });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find repository: ${message}`);
-  }
+  });
 }
 
-// Two jobs for a repository without a row can race to create it; the loser
-// reads the winner's row instead of failing.
-async function createRepositoryForReview(
-  installationId: string,
-  input: RepositoryForReviewInput,
-) {
+// Creates the row under an active installation, or returns null when the
+// installation is unknown or not active. Two jobs for a repository without a
+// row can race to create it; the loser reads the winner's row instead of
+// failing.
+async function createRepositoryForReview(input: RepositoryForReviewInput) {
+  const installation = await prisma.installation.findUnique({
+    where: { githubInstallationId: input.githubInstallationId },
+    select: { id: true, status: true },
+  });
+  if (!installation || installation.status !== "ACTIVE") return null;
+
   try {
     return await prisma.repository.create({
       data: {
-        installationId,
+        installationId: installation.id,
         githubRepoId: input.githubRepoId,
         fullName: input.fullName,
       },
@@ -227,7 +227,7 @@ async function createRepositoryForReview(
     return prisma.repository.findUnique({
       where: {
         installationId_githubRepoId: {
-          installationId,
+          installationId: installation.id,
           githubRepoId: input.githubRepoId,
         },
       },
@@ -245,7 +245,7 @@ export async function findLastReviewedCommitSha(input: {
   readonly githubRepoId: number;
   readonly pullRequestNumber: number;
 }): Promise<Result<string | null, string>> {
-  try {
+  return runQuery("Failed to find the last reviewed commit", async () => {
     const review = await prisma.review.findFirst({
       where: {
         status: "COMPLETED",
@@ -262,18 +262,14 @@ export async function findLastReviewedCommitSha(input: {
       select: { commitSha: true },
     });
     return ok(review?.commitSha ?? null);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find the last reviewed commit: ${message}`);
-  }
+  });
 }
 
 export async function findExistingReviewByCommitSha(
   repositoryId: RepositoryId,
   commitSha: string,
 ): Promise<Result<{ id: ReviewId; status: ReviewStatus } | null, string>> {
-  try {
+  return runQuery("Failed to check existing review", async () => {
     const review = await prisma.review.findUnique({
       where: { repositoryId_commitSha: { repositoryId, commitSha } },
       select: { id: true, status: true },
@@ -281,11 +277,7 @@ export async function findExistingReviewByCommitSha(
     return ok(
       review ? { id: review.id as ReviewId, status: review.status } : null,
     );
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to check existing review: ${message}`);
-  }
+  });
 }
 
 interface ClaimExistingReviewInput {
@@ -308,12 +300,29 @@ function staleReviewFilter(staleBefore: Date) {
   };
 }
 
+/**
+ * Updates the review when it matches `where` and deletes its comments in the
+ * same transaction. Returns false (and writes nothing) when it did not match.
+ */
+function updateReviewAndDropComments(
+  reviewId: ReviewId,
+  where: Prisma.ReviewWhereInput,
+  data: Prisma.ReviewUpdateManyMutationInput,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const { count } = await tx.review.updateMany({ where, data });
+    if (count === 0) return false;
+    await tx.reviewComment.deleteMany({ where: { reviewId } });
+    return true;
+  });
+}
+
 const STALE_REVIEW_BATCH_SIZE = 100;
 
 export async function findStaleReviewIds(
   staleBefore: Date,
 ): Promise<Result<ReviewId[], string>> {
-  try {
+  return runQuery("Failed to find stale reviews", async () => {
     const reviews = await prisma.review.findMany({
       where: staleReviewFilter(staleBefore),
       select: { id: true },
@@ -321,11 +330,7 @@ export async function findStaleReviewIds(
       take: STALE_REVIEW_BATCH_SIZE,
     });
     return ok(reviews.map((review) => review.id as ReviewId));
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find stale reviews: ${message}`);
-  }
+  });
 }
 
 /**
@@ -337,28 +342,20 @@ export async function failStaleReview(
   reviewId: ReviewId,
   staleBefore: Date,
 ): Promise<Result<boolean, string>> {
-  try {
-    const failed = await prisma.$transaction(async (tx) => {
-      const { count } = await tx.review.updateMany({
-        where: { id: reviewId, ...staleReviewFilter(staleBefore) },
-        data: {
-          status: "FAILED",
-          summary: "Review failed: timed out without finishing",
-          issuesFound: 0,
-          claimToken: null,
-          completedAt: new Date(),
-        },
-      });
-      if (count === 0) return false;
-      await tx.reviewComment.deleteMany({ where: { reviewId } });
-      return true;
-    });
+  return runQuery("Failed to expire stale review", async () => {
+    const failed = await updateReviewAndDropComments(
+      reviewId,
+      { id: reviewId, ...staleReviewFilter(staleBefore) },
+      {
+        status: "FAILED",
+        summary: "Review failed: timed out without finishing",
+        issuesFound: 0,
+        claimToken: null,
+        completedAt: new Date(),
+      },
+    );
     return ok(failed);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to expire stale review: ${message}`);
-  }
+  });
 }
 
 /**
@@ -373,39 +370,31 @@ export async function claimExistingReview(
   claim: ClaimExistingReviewInput,
 ): Promise<Result<ReviewClaimRef | null, string>> {
   const claimToken = randomUUID();
-  try {
-    const claimed = await prisma.$transaction(async (tx) => {
-      const { count } = await tx.review.updateMany({
-        where: {
-          id: reviewId,
-          OR: [
-            { status: "FAILED" },
-            { status: "PROCESSING", claimedByJobId: claim.jobId },
-            staleReviewFilter(claim.staleBefore),
-          ],
-        },
-        data: {
-          status: "PROCESSING",
-          claimedByJobId: claim.jobId,
-          claimToken,
-          processingStartedAt: new Date(),
-          pullRequestNumber: claim.pullRequestNumber,
-          summary: null,
-          issuesFound: 0,
-          processingTimeMs: null,
-          completedAt: null,
-        },
-      });
-      if (count === 0) return false;
-      await tx.reviewComment.deleteMany({ where: { reviewId } });
-      return true;
-    });
+  return runQuery("Failed to claim review", async () => {
+    const claimed = await updateReviewAndDropComments(
+      reviewId,
+      {
+        id: reviewId,
+        OR: [
+          { status: "FAILED" },
+          { status: "PROCESSING", claimedByJobId: claim.jobId },
+          staleReviewFilter(claim.staleBefore),
+        ],
+      },
+      {
+        status: "PROCESSING",
+        claimedByJobId: claim.jobId,
+        claimToken,
+        processingStartedAt: new Date(),
+        pullRequestNumber: claim.pullRequestNumber,
+        summary: null,
+        issuesFound: 0,
+        processingTimeMs: null,
+        completedAt: null,
+      },
+    );
     return ok(claimed ? { reviewId, claimToken } : null);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to claim review: ${message}`);
-  }
+  });
 }
 
 interface CreateReviewInput {
@@ -449,9 +438,7 @@ export async function createReviewRecord(
     return ok({ reviewId: review.id as ReviewId, claimToken });
   } catch (error) {
     if (isUniqueConstraintViolation(error)) return ok(null);
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to create review record: ${message}`);
+    return databaseError("Failed to create review record", error);
   }
 }
 
@@ -488,7 +475,7 @@ function currentClaimFilter(claim: ReviewClaimRef) {
 export async function saveReviewFindings(
   input: SaveReviewFindingsInput,
 ): Promise<Result<boolean, string>> {
-  try {
+  return runQuery("Failed to save review results", async () => {
     const saved = await prisma.$transaction(async (tx) => {
       const { count } = await tx.review.updateMany({
         where: currentClaimFilter(input),
@@ -504,26 +491,18 @@ export async function saveReviewFindings(
       return true;
     });
     return ok(saved);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to save review results: ${message}`);
-  }
+  });
 }
 
 export async function isReviewClaimCurrent(
   claim: ReviewClaimRef,
 ): Promise<Result<boolean, string>> {
-  try {
+  return runQuery("Failed to check review claim", async () => {
     const count = await prisma.review.count({
       where: currentClaimFilter(claim),
     });
     return ok(count > 0);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to check review claim: ${message}`);
-  }
+  });
 }
 
 /** Returns false (and writes nothing) when the claim was lost. */
@@ -531,17 +510,13 @@ export async function markReviewCompleted(
   claim: ReviewClaimRef,
   processingTimeMs: number,
 ): Promise<Result<boolean, string>> {
-  try {
+  return runQuery("Failed to mark review completed", async () => {
     const { count } = await prisma.review.updateMany({
       where: currentClaimFilter(claim),
       data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
     });
     return ok(count > 0);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to mark review completed: ${message}`);
-  }
+  });
 }
 
 /**
@@ -553,29 +528,19 @@ export async function failReview(
   claim: ReviewClaimRef,
   errorMessage: string,
 ): Promise<Result<boolean, string>> {
-  try {
-    const failed = await prisma.$transaction(async (tx) => {
-      const { count } = await tx.review.updateMany({
-        where: currentClaimFilter(claim),
-        data: {
-          status: "FAILED",
-          summary: `Review failed: ${errorMessage}`,
-          issuesFound: 0,
-          completedAt: new Date(),
-        },
-      });
-      if (count === 0) return false;
-      await tx.reviewComment.deleteMany({
-        where: { reviewId: claim.reviewId },
-      });
-      return true;
-    });
+  return runQuery("Failed to mark review as failed", async () => {
+    const failed = await updateReviewAndDropComments(
+      claim.reviewId,
+      currentClaimFilter(claim),
+      {
+        status: "FAILED",
+        summary: `Review failed: ${errorMessage}`,
+        issuesFound: 0,
+        completedAt: new Date(),
+      },
+    );
     return ok(failed);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to mark review as failed: ${message}`);
-  }
+  });
 }
 
 // --- Job queries (Phase 4: Background Processing) ---
@@ -589,7 +554,7 @@ interface CreateJobRecordInput {
 export async function createJobRecord(
   input: CreateJobRecordInput,
 ): Promise<Result<{ id: string }, string>> {
-  try {
+  return runQuery("Failed to create job record", async () => {
     const job = await prisma.job.create({
       data: {
         type: input.type,
@@ -598,11 +563,7 @@ export async function createJobRecord(
       },
     });
     return ok({ id: job.id });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to create job record: ${message}`);
-  }
+  });
 }
 
 export async function updateJobRecord(
@@ -610,7 +571,7 @@ export async function updateJobRecord(
   status: JobStatus,
   details?: { lastError?: string; attempts?: number },
 ): Promise<Result<void, string>> {
-  try {
+  return runQuery("Failed to update job record", async () => {
     await prisma.job.update({
       where: { id },
       data: {
@@ -624,11 +585,7 @@ export async function updateJobRecord(
       },
     });
     return ok(undefined);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to update job record: ${message}`);
-  }
+  });
 }
 
 // --- Dashboard queries (Phase 5: Dashboard UI) ---
@@ -644,7 +601,7 @@ interface InstallationRecord {
 export async function findInstallationsByGitHubIds(
   githubInstallationIds: readonly number[],
 ): Promise<Result<readonly InstallationRecord[], string>> {
-  try {
+  return runQuery("Failed to find installations", async () => {
     const installations = await prisma.installation.findMany({
       where: {
         githubInstallationId: { in: [...githubInstallationIds] },
@@ -665,11 +622,7 @@ export async function findInstallationsByGitHubIds(
         id: i.id as InstallationId,
       })),
     );
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find installations: ${message}`);
-  }
+  });
 }
 
 // Repositories the user may see: ones GitHub reported as accessible, under an
@@ -688,12 +641,6 @@ function repositoryInScopeWhere(
   };
 }
 
-function repositoryManageableWhere(
-  scope: AccessScope,
-): Prisma.RepositoryWhereInput {
-  return repositoryInScopeWhere(scope, scope.manageableGithubRepoIds);
-}
-
 interface RepositoryListItem {
   readonly id: RepositoryId;
   readonly githubRepoId: number;
@@ -705,7 +652,7 @@ interface RepositoryListItem {
 export async function listRepositoriesInScope(
   scope: AccessScope,
 ): Promise<Result<readonly RepositoryListItem[], string>> {
-  try {
+  return runQuery("Failed to list repositories", async () => {
     const repositories = await prisma.repository.findMany({
       where: repositoryInScopeWhere(scope),
       select: {
@@ -724,11 +671,7 @@ export async function listRepositoriesInScope(
         installationId: r.installationId as InstallationId,
       })),
     );
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to list repositories: ${message}`);
-  }
+  });
 }
 
 interface RepositoryDetail {
@@ -742,7 +685,7 @@ export async function findAccessibleRepositoryById(
   repositoryId: RepositoryId,
   scope: AccessScope,
 ): Promise<Result<RepositoryDetail | null, string>> {
-  try {
+  return runQuery("Failed to find repository", async () => {
     const repo = await prisma.repository.findFirst({
       where: { id: repositoryId, ...repositoryInScopeWhere(scope) },
       select: {
@@ -754,11 +697,25 @@ export async function findAccessibleRepositoryById(
     });
     if (!repo) return ok(null);
     return ok({ ...repo, id: repo.id as RepositoryId });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to find repository: ${message}`);
-  }
+  });
+}
+
+function updateManageableRepository(
+  repositoryId: RepositoryId,
+  scope: AccessScope,
+  data: Prisma.RepositoryUpdateManyMutationInput,
+  failurePrefix: string,
+): Promise<Result<boolean, string>> {
+  return runQuery(failurePrefix, async () => {
+    const { count } = await prisma.repository.updateMany({
+      where: {
+        id: repositoryId,
+        ...repositoryInScopeWhere(scope, scope.manageableGithubRepoIds),
+      },
+      data,
+    });
+    return ok(count > 0);
+  });
 }
 
 /**
@@ -771,17 +728,12 @@ export async function updateRepositoryEnabled(
   isEnabled: boolean,
   scope: AccessScope,
 ): Promise<Result<boolean, string>> {
-  try {
-    const { count } = await prisma.repository.updateMany({
-      where: { id: repositoryId, ...repositoryManageableWhere(scope) },
-      data: { isEnabled },
-    });
-    return ok(count > 0);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to update repository: ${message}`);
-  }
+  return updateManageableRepository(
+    repositoryId,
+    scope,
+    { isEnabled },
+    "Failed to update repository",
+  );
 }
 
 export async function updateRepositorySettings(
@@ -789,17 +741,12 @@ export async function updateRepositorySettings(
   settings: RepositorySettingsInput,
   scope: AccessScope,
 ): Promise<Result<boolean, string>> {
-  try {
-    const { count } = await prisma.repository.updateMany({
-      where: { id: repositoryId, ...repositoryManageableWhere(scope) },
-      data: { settings: JSON.parse(JSON.stringify(settings)) },
-    });
-    return ok(count > 0);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to update repository settings: ${message}`);
-  }
+  return updateManageableRepository(
+    repositoryId,
+    scope,
+    { settings: JSON.parse(JSON.stringify(settings)) },
+    "Failed to update repository settings",
+  );
 }
 
 interface ListReviewsInput {
@@ -822,6 +769,29 @@ interface ReviewListItem {
   readonly completedAt: Date | null;
 }
 
+const REVIEW_SUMMARY_SELECT = {
+  id: true,
+  pullRequestNumber: true,
+  commitSha: true,
+  status: true,
+  issuesFound: true,
+  processingTimeMs: true,
+  createdAt: true,
+  completedAt: true,
+  repository: { select: { fullName: true } },
+} as const;
+
+function toReviewListItem(
+  review: Prisma.ReviewGetPayload<{ select: typeof REVIEW_SUMMARY_SELECT }>,
+): ReviewListItem {
+  const { repository, ...fields } = review;
+  return {
+    ...fields,
+    id: review.id as ReviewId,
+    repositoryFullName: repository.fullName,
+  };
+}
+
 export async function listReviewsInScope(
   input: ListReviewsInput,
 ): Promise<
@@ -833,7 +803,7 @@ export async function listReviewsInScope(
   const limit = input.limit ?? 20;
   const repository = repositoryInScopeWhere(input.scope);
 
-  try {
+  return runQuery("Failed to list reviews", async () => {
     // Prisma locates the cursor row without the where filter, so a cursor
     // outside the scope would reveal where that review sits in time.
     if (input.cursor) {
@@ -852,17 +822,7 @@ export async function listReviewsInScope(
         },
         ...(input.status ? { status: input.status } : {}),
       },
-      select: {
-        id: true,
-        pullRequestNumber: true,
-        commitSha: true,
-        status: true,
-        issuesFound: true,
-        processingTimeMs: true,
-        createdAt: true,
-        completedAt: true,
-        repository: { select: { fullName: true } },
-      },
+      select: REVIEW_SUMMARY_SELECT,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
@@ -874,37 +834,14 @@ export async function listReviewsInScope(
     const nextCursor = hasMore && lastItem ? lastItem.id : null;
 
     return ok({
-      reviews: items.map((r) => ({
-        id: r.id as ReviewId,
-        repositoryFullName: r.repository.fullName,
-        pullRequestNumber: r.pullRequestNumber,
-        commitSha: r.commitSha,
-        status: r.status,
-        issuesFound: r.issuesFound,
-        processingTimeMs: r.processingTimeMs,
-        createdAt: r.createdAt,
-        completedAt: r.completedAt,
-      })),
+      reviews: items.map(toReviewListItem),
       nextCursor,
     });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to list reviews: ${message}`);
-  }
+  });
 }
 
-interface ReviewDetailResult {
-  readonly id: ReviewId;
-  readonly repositoryFullName: string;
-  readonly pullRequestNumber: number;
-  readonly commitSha: string;
-  readonly status: ReviewStatus;
+interface ReviewDetailResult extends ReviewListItem {
   readonly summary: string | null;
-  readonly issuesFound: number;
-  readonly processingTimeMs: number | null;
-  readonly createdAt: Date;
-  readonly completedAt: Date | null;
   readonly comments: ReadonlyArray<{
     readonly id: string;
     readonly filePath: string;
@@ -921,23 +858,15 @@ export async function getReviewWithCommentsInScope(
   reviewId: ReviewId,
   scope: AccessScope,
 ): Promise<Result<ReviewDetailResult | null, string>> {
-  try {
+  return runQuery("Failed to get review details", async () => {
     const review = await prisma.review.findFirst({
       where: {
         id: reviewId,
         repository: repositoryInScopeWhere(scope),
       },
       select: {
-        id: true,
-        pullRequestNumber: true,
-        commitSha: true,
-        status: true,
+        ...REVIEW_SUMMARY_SELECT,
         summary: true,
-        issuesFound: true,
-        processingTimeMs: true,
-        createdAt: true,
-        completedAt: true,
-        repository: { select: { fullName: true } },
         comments: {
           select: {
             id: true,
@@ -956,24 +885,9 @@ export async function getReviewWithCommentsInScope(
 
     if (!review) return ok(null);
 
-    return ok({
-      id: review.id as ReviewId,
-      repositoryFullName: review.repository.fullName,
-      pullRequestNumber: review.pullRequestNumber,
-      commitSha: review.commitSha,
-      status: review.status,
-      summary: review.summary,
-      issuesFound: review.issuesFound,
-      processingTimeMs: review.processingTimeMs,
-      createdAt: review.createdAt,
-      completedAt: review.completedAt,
-      comments: review.comments,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to get review details: ${message}`);
-  }
+    const { summary, comments, ...listFields } = review;
+    return ok({ ...toReviewListItem(listFields), summary, comments });
+  });
 }
 
 interface ReviewStatsResult {
@@ -989,70 +903,48 @@ interface ReviewStatsResult {
 export async function getReviewStatsInScope(
   scope: AccessScope,
 ): Promise<Result<ReviewStatsResult, string>> {
-  try {
+  return runQuery("Failed to get review stats", async () => {
     const repository = repositoryInScopeWhere(scope);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const [totalReviews, issueSum, recentCount, categoryGroups] =
-      await prisma.$transaction([
-        prisma.review.count({
-          where: { repository },
-        }),
-        prisma.review.aggregate({
-          where: { repository },
-          _sum: { issuesFound: true },
-        }),
-        prisma.review.count({
-          where: {
-            repository,
-            createdAt: { gte: thirtyDaysAgo },
-          },
-        }),
-        prisma.reviewComment.groupBy({
-          by: ["category"],
-          orderBy: { category: "asc" },
-          where: { review: { repository } },
-          _count: { _all: true },
-        }),
-      ]);
+    const [totals, recentCount, categoryGroups] = await Promise.all([
+      prisma.review.aggregate({
+        where: { repository },
+        _count: { _all: true },
+        _sum: { issuesFound: true },
+      }),
+      prisma.review.count({
+        where: { repository, createdAt: { gte: thirtyDaysAgo } },
+      }),
+      prisma.reviewComment.groupBy({
+        by: ["category"],
+        orderBy: { category: "asc" },
+        where: { review: { repository } },
+        _count: { _all: true },
+      }),
+    ]);
 
     return ok({
-      totalReviews,
-      totalIssuesFound: issueSum._sum.issuesFound ?? 0,
+      totalReviews: totals._count._all,
+      totalIssuesFound: totals._sum.issuesFound ?? 0,
       recentReviewCount: recentCount,
-      categoryBreakdown: categoryGroups.map((g) => {
-        const countValue = g._count;
-        const count =
-          typeof countValue === "number"
-            ? countValue
-            : typeof countValue === "object" &&
-                countValue !== null &&
-                "_all" in countValue
-              ? (countValue._all as number)
-              : 0;
-        return { category: g.category, count };
-      }),
+      categoryBreakdown: categoryGroups.map((g) => ({
+        category: g.category,
+        count: g._count._all,
+      })),
     });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to get review stats: ${message}`);
-  }
+  });
 }
 
 export async function markInstallationDeleted(
   githubInstallationId: number,
 ): Promise<Result<void, string>> {
-  try {
+  return runQuery("Failed to mark installation as deleted", async () => {
     await prisma.installation.updateMany({
       where: { githubInstallationId },
       data: { status: "DELETED" },
     });
     return ok(undefined);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to mark installation as deleted: ${message}`);
-  }
+  });
 }
