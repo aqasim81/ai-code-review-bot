@@ -3,6 +3,7 @@ export const DEAD_LETTER_QUEUE_NAME = "review-jobs-dead-letter" as const;
 
 export interface ReviewJobPayload {
   readonly installationId: number;
+  readonly githubRepoId: number;
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;

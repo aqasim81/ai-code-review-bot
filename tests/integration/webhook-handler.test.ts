@@ -4,12 +4,17 @@ vi.mock("@/lib/db/queries");
 vi.mock("@/lib/queue/producer");
 
 import {
+  addRepositoriesToInstallation,
   createInstallationWithRepositories,
   markInstallationDeleted,
+  removeRepositoriesFromInstallation,
+  setInstallationSuspended,
 } from "@/lib/db/queries";
 import {
   handleInstallationCreated,
   handleInstallationDeleted,
+  handleInstallationRepositoriesChanged,
+  handleInstallationSuspension,
   handlePullRequestEvent,
 } from "@/lib/github/webhook-handler";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
@@ -257,6 +262,128 @@ describe("handleInstallationDeleted", () => {
   });
 });
 
+describe("handleInstallationRepositoriesChanged", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function createPayload(overrides?: Record<string, unknown>) {
+    return {
+      action: "added",
+      installation: {
+        id: 12345,
+        account: { login: "acme", type: "Organization" },
+      },
+      repositories_added: [
+        { id: 200, full_name: "acme/new-repo" },
+        { id: 201, full_name: "acme/bad:name" },
+      ],
+      repositories_removed: [],
+      ...overrides,
+    };
+  }
+
+  it("records well-formed repositories added to the installation", async () => {
+    vi.mocked(addRepositoriesToInstallation).mockResolvedValueOnce(
+      ok({ repositoryCount: 1 }),
+    );
+
+    const result = await handleInstallationRepositoriesChanged(createPayload());
+
+    expect(result).toEqual({ success: true, data: { acknowledged: true } });
+    expect(addRepositoriesToInstallation).toHaveBeenCalledWith(
+      {
+        githubInstallationId: 12345,
+        githubAccountLogin: "acme",
+        githubAccountType: "ORG",
+      },
+      [{ githubRepoId: 200, fullName: "acme/new-repo" }],
+    );
+  });
+
+  it("removes repositories taken out of the installation", async () => {
+    vi.mocked(removeRepositoriesFromInstallation).mockResolvedValueOnce(
+      ok({ removedCount: 2 }),
+    );
+
+    const result = await handleInstallationRepositoriesChanged(
+      createPayload({
+        action: "removed",
+        repositories_added: [],
+        repositories_removed: [{ id: 300 }, { id: 301 }],
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(removeRepositoriesFromInstallation).toHaveBeenCalledWith(
+      12345,
+      [300, 301],
+    );
+    expect(addRepositoriesToInstallation).not.toHaveBeenCalled();
+  });
+
+  it("returns INSTALLATION_SAVE_FAILED when the database update fails", async () => {
+    vi.mocked(addRepositoriesToInstallation).mockResolvedValueOnce(
+      err("DB error"),
+    );
+
+    const result = await handleInstallationRepositoriesChanged(createPayload());
+
+    expect(result).toEqual({
+      success: false,
+      error: "INSTALLATION_SAVE_FAILED",
+    });
+  });
+
+  it("rejects an unknown action", async () => {
+    const result = await handleInstallationRepositoriesChanged(
+      createPayload({ action: "renamed" }),
+    );
+
+    expect(result).toEqual({ success: false, error: "INVALID_PAYLOAD" });
+  });
+});
+
+describe("handleInstallationSuspension", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("marks the installation suspended", async () => {
+    vi.mocked(setInstallationSuspended).mockResolvedValueOnce(ok(undefined));
+
+    const result = await handleInstallationSuspension(
+      { installation: { id: 12345 } },
+      true,
+    );
+
+    expect(result).toEqual({ success: true, data: { acknowledged: true } });
+    expect(setInstallationSuspended).toHaveBeenCalledWith(12345, true);
+  });
+
+  it("marks the installation active again when resumed", async () => {
+    vi.mocked(setInstallationSuspended).mockResolvedValueOnce(ok(undefined));
+
+    await handleInstallationSuspension({ installation: { id: 12345 } }, false);
+
+    expect(setInstallationSuspended).toHaveBeenCalledWith(12345, false);
+  });
+
+  it("returns INSTALLATION_SAVE_FAILED when the database update fails", async () => {
+    vi.mocked(setInstallationSuspended).mockResolvedValueOnce(err("DB error"));
+
+    const result = await handleInstallationSuspension(
+      { installation: { id: 12345 } },
+      true,
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "INSTALLATION_SAVE_FAILED",
+    });
+  });
+});
+
 describe("handlePullRequestEvent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -269,7 +396,7 @@ describe("handlePullRequestEvent", () => {
         number: 42,
         head: { sha: HEAD_SHA },
       },
-      repository: { full_name: "test-owner/test-repo" },
+      repository: { id: 555, full_name: "test-owner/test-repo" },
       installation: { id: 12345 },
       ...overrides,
     };
@@ -286,6 +413,7 @@ describe("handlePullRequestEvent", () => {
     expect(enqueueReviewJob).toHaveBeenCalledWith(
       expect.objectContaining({
         installationId: 12345,
+        githubRepoId: 555,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: HEAD_SHA,
@@ -300,7 +428,7 @@ describe("handlePullRequestEvent", () => {
     const result = await handlePullRequestEvent(
       createPrPayload({
         pull_request: { number: 42, head: { sha: sha256 } },
-        repository: { full_name: "my_org-1/repo.js" },
+        repository: { id: 555, full_name: "my_org-1/repo.js" },
       }),
     );
 
@@ -311,6 +439,15 @@ describe("handlePullRequestEvent", () => {
         commitSha: sha256,
       }),
     );
+  });
+
+  it("rejects a pull_request payload without a repository ID", async () => {
+    const result = await handlePullRequestEvent(
+      createPrPayload({ repository: { full_name: "test-owner/test-repo" } }),
+    );
+
+    expect(result).toEqual({ success: false, error: "INVALID_PAYLOAD" });
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
   it("enqueues delta review job for 'synchronize' with 'before' sha", async () => {

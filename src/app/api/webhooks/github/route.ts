@@ -4,10 +4,13 @@ import { env } from "@/lib/env";
 import {
   handleInstallationCreated,
   handleInstallationDeleted,
+  handleInstallationRepositoriesChanged,
+  handleInstallationSuspension,
   handlePullRequestEvent,
 } from "@/lib/github/webhook-handler";
 import { logger } from "@/lib/logger";
 import type { WebhookHandlerError } from "@/types/errors";
+import type { Result } from "@/types/results";
 
 const webhooks = new Webhooks({ secret: env.GITHUB_WEBHOOK_SECRET });
 
@@ -40,6 +43,50 @@ function handlerFailureResponse(
     { error: "Internal processing error" },
     { status: 500 },
   );
+}
+
+type EventHandler = (
+  payload: Record<string, unknown>,
+) => Promise<Result<Record<string, unknown>, WebhookHandlerError>>;
+
+async function acknowledged(
+  pending: Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>>,
+): Promise<Result<Record<string, unknown>, WebhookHandlerError>> {
+  const result = await pending;
+  return result.success
+    ? { success: true, data: { acknowledged: result.data.acknowledged } }
+    : result;
+}
+
+// Keyed by "event.action", or by event alone when every action goes to one handler.
+const EVENT_HANDLERS: Readonly<Record<string, EventHandler>> = {
+  "installation.created": async (payload) => {
+    const result = await handleInstallationCreated(payload);
+    return result.success
+      ? {
+          success: true,
+          data: { installationId: result.data.installationId },
+        }
+      : result;
+  },
+  "installation.deleted": (payload) =>
+    acknowledged(handleInstallationDeleted(payload)),
+  "installation.suspend": (payload) =>
+    acknowledged(handleInstallationSuspension(payload, true)),
+  "installation.unsuspend": (payload) =>
+    acknowledged(handleInstallationSuspension(payload, false)),
+  installation_repositories: (payload) =>
+    acknowledged(handleInstallationRepositoriesChanged(payload)),
+  pull_request: (payload) => acknowledged(handlePullRequestEvent(payload)),
+};
+
+function findEventHandler(
+  eventName: string,
+  action: unknown,
+): EventHandler | undefined {
+  return typeof action === "string"
+    ? (EVENT_HANDLERS[`${eventName}.${action}`] ?? EVENT_HANDLERS[eventName])
+    : EVENT_HANDLERS[eventName];
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -96,45 +143,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
 
   try {
-    if (eventName === "installation" && payload.action === "created") {
-      const result = await handleInstallationCreated(payload);
-      if (!result.success) {
-        return handlerFailureResponse(result.error, { deliveryId, eventName });
-      }
-      return NextResponse.json({
-        received: true,
-        installationId: result.data.installationId,
+    const handler = findEventHandler(eventName, payload.action);
+    if (!handler) {
+      logger.debug("Unhandled webhook event", {
+        eventName,
+        action: payload.action,
+        deliveryId,
       });
+      return NextResponse.json({ received: true, handled: false });
     }
 
-    if (eventName === "installation" && payload.action === "deleted") {
-      const result = await handleInstallationDeleted(payload);
-      if (!result.success) {
-        return handlerFailureResponse(result.error, { deliveryId, eventName });
-      }
-      return NextResponse.json({
-        received: true,
-        acknowledged: result.data.acknowledged,
-      });
+    const result = await handler(payload);
+    if (!result.success) {
+      return handlerFailureResponse(result.error, { deliveryId, eventName });
     }
-
-    if (eventName === "pull_request") {
-      const result = await handlePullRequestEvent(payload);
-      if (!result.success) {
-        return handlerFailureResponse(result.error, { deliveryId, eventName });
-      }
-      return NextResponse.json({
-        received: true,
-        acknowledged: result.data.acknowledged,
-      });
-    }
-
-    logger.debug("Unhandled webhook event", {
-      eventName,
-      action: payload.action,
-      deliveryId,
-    });
-    return NextResponse.json({ received: true, handled: false });
+    return NextResponse.json({ received: true, ...result.data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     logger.error("Unexpected error processing webhook", {
