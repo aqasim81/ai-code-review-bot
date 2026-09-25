@@ -72,7 +72,6 @@ const pullRequestEventPayloadSchema = pullRequestActionSchema.extend({
     full_name: repositoryFullNameSchema,
   }),
   installation: z.object({ id: z.number().int() }),
-  before: commitShaSchema.optional(),
 });
 
 function parseWebhookPayloadShape<T>(
@@ -341,14 +340,15 @@ export async function handlePullRequestEvent(
     commitSha: payload.pull_request.head.sha,
   });
 
-  if (payload.action === "synchronize" && payload.before) {
+  // A push is reviewed against the last reviewed commit, which the worker
+  // looks up; the push's own "before" commit may never have been reviewed.
+  if (payload.action === "synchronize") {
     const result = await enqueueDeltaReviewJob({
       installationId,
       githubRepoId: payload.repository.id,
       repositoryFullName: payload.repository.full_name,
       pullRequestNumber: payload.pull_request.number,
       commitSha: payload.pull_request.head.sha,
-      previousCommitSha: payload.before,
     });
 
     if (!result.success) {

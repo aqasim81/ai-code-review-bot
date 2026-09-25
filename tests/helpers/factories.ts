@@ -256,6 +256,7 @@ export function createMockGitHubService(
       .mockResolvedValue(ok(null)),
     compareCommits: vi.fn<GitHubService["compareCommits"]>().mockResolvedValue(
       ok({
+        status: "ahead",
         files: [{ filename: "src/lib/example.ts", status: "modified" }],
       } satisfies CommitComparisonResult),
     ),
