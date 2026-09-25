@@ -361,12 +361,16 @@ interface LlmAnalysisResult {
   readonly totalOutputTokens: number;
 }
 
+function describeFindingCount(findingCount: number): string {
+  if (findingCount === 0) return "No issues found in this review.";
+  return `Found ${findingCount} issue${findingCount === 1 ? "" : "s"} in this review.`;
+}
+
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
 ): Promise<Result<LlmAnalysisResult, "REVIEW_LLM_FAILED">> {
   const allFindings: ReviewFinding[] = [];
-  const summaries: string[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -381,21 +385,13 @@ async function analyzeAllChunks(
     }
 
     allFindings.push(...result.data.findings);
-    if (result.data.summary) {
-      summaries.push(result.data.summary);
-    }
     totalInputTokens += result.data.tokenUsage.inputTokens;
     totalOutputTokens += result.data.tokenUsage.outputTokens;
   }
 
-  const summary =
-    summaries.length > 0
-      ? summaries.join("\n\n")
-      : "No significant issues found.";
-
   return ok({
     findings: allFindings,
-    summary,
+    summary: describeFindingCount(allFindings.length),
     totalInputTokens,
     totalOutputTokens,
   });

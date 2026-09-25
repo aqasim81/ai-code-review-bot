@@ -219,33 +219,4 @@ describe("createLlmClient", () => {
 
     vi.useRealTimers();
   });
-
-  it("builds 'No issues found' summary for zero findings", async () => {
-    mockSuccessfulResponse();
-
-    // Override parser mock to return empty findings
-    const { parseLlmReviewResponse } = await import("@/lib/llm/parser");
-    vi.mocked(parseLlmReviewResponse).mockReturnValueOnce({
-      success: true,
-      data: [],
-    });
-
-    const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(createReviewChunk());
-
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.summary).toContain("No issues found");
-  });
-
-  it("builds summary with finding count", async () => {
-    mockSuccessfulResponse();
-
-    const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(createReviewChunk());
-
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.summary).toContain("1 issue");
-  });
 });

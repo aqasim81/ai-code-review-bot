@@ -402,6 +402,25 @@ describe("executeReview — review pipeline", () => {
     expect(body).not.toContain("Found 1 issue");
   });
 
+  it("says no issues were found when the analysis returns no findings", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(ok(createReviewResult({ findings: [] }))),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success && result.data.summary).toBe(
+      "No issues found in this review.",
+    );
+  });
+
   it("marks the posted review body with a hidden marker for the review ID", async () => {
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi

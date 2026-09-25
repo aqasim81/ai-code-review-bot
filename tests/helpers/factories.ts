@@ -186,7 +186,6 @@ export function createReviewResult(
 ): ReviewResult {
   return {
     findings: [createReviewFinding()],
-    summary: "Found 1 issue",
     tokenUsage: { inputTokens: 1000, outputTokens: 200 },
     ...overrides,
   };
