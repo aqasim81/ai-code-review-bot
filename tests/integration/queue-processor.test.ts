@@ -8,6 +8,7 @@ vi.mock("@/lib/review/engine");
 import { type Job, UnrecoverableError } from "bullmq";
 import {
   createJobRecord,
+  failUnfinishedJobRecord,
   findLastReviewedCommitSha,
   updateJobRecord,
 } from "@/lib/db/queries";
@@ -17,6 +18,7 @@ import {
   calculateBackoffDelay,
   isFinalJobFailure,
   processReviewJob,
+  recordFinalJobFailure,
 } from "@/lib/queue/processor";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { executeReview } from "@/lib/review/engine";
@@ -421,6 +423,21 @@ describe("processReviewJob", () => {
     );
   });
 
+  it("marks the new job record FAILED when its ID cannot be saved on the job", async () => {
+    const job = createMockJob({
+      updateData: vi.fn().mockRejectedValue(new Error("Connection is closed")),
+    });
+
+    await expect(processReviewJob(job)).rejects.toThrow("Connection is closed");
+
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      "db-job-1",
+      "FAILED",
+      expect.objectContaining({ lastError: "JOB_RECORD_ID_NOT_SAVED" }),
+    );
+    expect(executeReview).not.toHaveBeenCalled();
+  });
+
   it("handles DB job record creation failure gracefully", async () => {
     vi.mocked(createJobRecord).mockResolvedValue(err("DB error"));
 
@@ -501,5 +518,33 @@ describe("isFinalJobFailure", () => {
 
   it("is not final while attempts remain", () => {
     expect(isFinalJobFailure(job(1), new Error("boom"))).toBe(false);
+  });
+});
+
+describe("recordFinalJobFailure", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(failUnfinishedJobRecord).mockResolvedValue(ok(true));
+  });
+
+  it("fails the job record of a job BullMQ failed for stalling too often", async () => {
+    const job = createMockJob({ attemptsMade: 1 });
+    job.data = { ...job.data, dbJobId: "db-job-7" };
+
+    await recordFinalJobFailure(
+      job,
+      new UnrecoverableError("job stalled more than allowable limit"),
+    );
+
+    expect(failUnfinishedJobRecord).toHaveBeenCalledWith("db-job-7", {
+      lastError: "job stalled more than allowable limit",
+      attempts: 1,
+    });
+  });
+
+  it("does nothing when the job never saved a record", async () => {
+    await recordFinalJobFailure(createMockJob(), new Error("boom"));
+
+    expect(failUnfinishedJobRecord).not.toHaveBeenCalled();
   });
 });
