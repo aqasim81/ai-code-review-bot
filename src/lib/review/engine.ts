@@ -96,6 +96,13 @@ async function createNewReviewRecord(
     });
     return err("REVIEW_DB_ERROR");
   }
+  if (!createResult.data) {
+    logger.info("Another job created the review first, skipping", {
+      commitSha: request.commitSha,
+      jobId: request.jobId,
+    });
+    return err("REVIEW_ALREADY_EXISTS");
+  }
   return ok(createResult.data);
 }
 
