@@ -421,6 +421,21 @@ describe("processReviewJob", () => {
     );
   });
 
+  it("marks the new job record FAILED when its ID cannot be saved on the job", async () => {
+    const job = createMockJob({
+      updateData: vi.fn().mockRejectedValue(new Error("Connection is closed")),
+    });
+
+    await expect(processReviewJob(job)).rejects.toThrow("Connection is closed");
+
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      "db-job-1",
+      "FAILED",
+      expect.objectContaining({ lastError: "JOB_RECORD_ID_NOT_SAVED" }),
+    );
+    expect(executeReview).not.toHaveBeenCalled();
+  });
+
   it("handles DB job record creation failure gracefully", async () => {
     vi.mocked(createJobRecord).mockResolvedValue(err("DB error"));
 
