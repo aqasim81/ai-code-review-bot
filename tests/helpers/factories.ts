@@ -276,6 +276,9 @@ export function createMockGitHubService(
           postedCommentCount: 1,
         } satisfies PostedReviewResult),
       ),
+    findPostedReview: vi
+      .fn<GitHubService["findPostedReview"]>()
+      .mockResolvedValue(ok(null)),
     compareCommits: vi.fn<GitHubService["compareCommits"]>().mockResolvedValue(
       ok({
         files: [{ filename: "src/lib/example.ts", status: "modified" }],

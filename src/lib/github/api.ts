@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import { Octokit } from "@octokit/rest";
 import { env } from "@/lib/env";
+import { selectReviewWithMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
 import type { GitHubError } from "@/types/errors";
 import type {
@@ -38,6 +39,30 @@ function createGitHubAppJwt(credentials: GitHubAppCredentials): string {
   const signature = sign.sign(credentials.privateKey, "base64url");
 
   return `${header}.${payload}.${signature}`;
+}
+
+let cachedAppBotLogin: string | null = null;
+
+/**
+ * The login GitHub uses for reviews this app posts (`<slug>[bot]`), read from
+ * `GET /app` rather than configuration so it cannot drift from the real app.
+ */
+async function getAppBotLogin(
+  credentials: GitHubAppCredentials,
+): Promise<Result<string, GitHubError>> {
+  if (cachedAppBotLogin !== null) return ok(cachedAppBotLogin);
+  try {
+    const appOctokit = new Octokit({ auth: createGitHubAppJwt(credentials) });
+    const { data } = await appOctokit.apps.getAuthenticated();
+    if (!data?.slug) return err("GITHUB_UNKNOWN_ERROR");
+    cachedAppBotLogin = `${data.slug}[bot]`;
+    return ok(cachedAppBotLogin);
+  } catch (error) {
+    logger.error("Failed to look up the GitHub App", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return err(classifyGitHubError(error));
+  }
 }
 
 async function createInstallationAccessToken(
@@ -277,6 +302,55 @@ function createGitHubService(
           clearToken();
         }
         logger.error("Failed to post review", {
+          owner,
+          repo,
+          pullNumber,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return err(classifyGitHubError(error));
+      }
+    },
+
+    async findPostedReview(
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      marker: string,
+    ): Promise<Result<{ githubReviewId: number } | null, GitHubError>> {
+      const botLoginResult = await getAppBotLogin(credentials);
+      if (!botLoginResult.success) return botLoginResult;
+      const octokitResult = await getOctokit();
+      if (!octokitResult.success) return octokitResult;
+      const octokit = octokitResult.data;
+
+      try {
+        await checkRateLimit(octokit);
+
+        const reviews = await octokit.paginate(octokit.pulls.listReviews, {
+          owner,
+          repo,
+          pull_number: pullNumber,
+          per_page: 100,
+        });
+
+        return ok(
+          selectReviewWithMarker(
+            reviews.map((review) => ({
+              id: review.id,
+              body: review.body,
+              user: review.user
+                ? { login: review.user.login, type: review.user.type }
+                : null,
+            })),
+            marker,
+            botLoginResult.data,
+          ),
+        );
+      } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
+        logger.error("Failed to list pull request reviews", {
           owner,
           repo,
           pullNumber,
