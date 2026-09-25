@@ -47,5 +47,153 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["worker/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg",
+                      "pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg",
+                      "pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
+                  }
+                ]
+              }
+            },
+            "noProcessEnv": "error"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "**/generated/prisma/client*",
+                      "**/generated/prisma/internal/**",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg",
+                      "pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  },
+                  {
+                    "group": [
+                      "next",
+                      "next/**",
+                      "@next/**",
+                      "next-auth",
+                      "next-auth/**"
+                    ],
+                    "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/db/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "next",
+                      "next/**",
+                      "@next/**",
+                      "next-auth",
+                      "next-auth/**"
+                    ],
+                    "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  },
+                  {
+                    "group": ["process", "node:process"],
+                    "message": "Invariant 5: read configuration through src/lib/env.ts, not the process module."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/env.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
+    }
+  ]
 }
