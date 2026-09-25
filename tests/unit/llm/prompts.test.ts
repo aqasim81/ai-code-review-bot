@@ -263,4 +263,31 @@ describe("buildReviewPrompt", () => {
     );
     expect(result.system).not.toContain("across five categories");
   });
+
+  it.each([
+    [["BUGS"], ["BUGS"]],
+    [
+      ["PERFORMANCE", "BEST_PRACTICES"],
+      ["PERFORMANCE", "BEST_PRACTICES"],
+    ],
+    [
+      ["SECURITY", "BUGS", "PERFORMANCE", "STYLE"],
+      ["SECURITY", "BUGS", "PERFORMANCE"],
+    ],
+  ] as const)(
+    "shows example findings only in the enabled categories %j",
+    (enabledCategories, exampleCategories) => {
+      const result = buildReviewPrompt(
+        createReviewChunk(),
+        createReviewPromptOptions({
+          enabledCategories: [...enabledCategories],
+        }),
+      );
+
+      const shown = [
+        ...result.system.matchAll(/^ {4}"category": "([A-Z_]+)",$/gm),
+      ].map((match) => match[1]);
+      expect(shown).toEqual(exampleCategories);
+    },
+  );
 });
