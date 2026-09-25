@@ -4,10 +4,24 @@ import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import { calculateBackoffDelay, processReviewJob } from "@/lib/queue/processor";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { DEAD_LETTER_QUEUE_NAME, REVIEW_QUEUE_NAME } from "@/lib/queue/types";
+import { expireStaleReviews } from "@/lib/review/stale-reviews";
 
 const CONCURRENCY = 3;
 const STALE_INTERVAL_MS = 30_000;
 const LOCK_DURATION_MS = 5 * 60 * 1000;
+const STALE_REVIEW_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Periodically expires reviews stuck unfinished past the stale cutoff. Safe to
+ * run in every worker: each expiry is a guarded, per-review update.
+ */
+function startStaleReviewSweep(): NodeJS.Timeout {
+  const sweep = (): void => {
+    void expireStaleReviews();
+  };
+  sweep();
+  return setInterval(sweep, STALE_REVIEW_SWEEP_INTERVAL_MS);
+}
 
 function createDeadLetterQueue(): Queue {
   return new Queue(DEAD_LETTER_QUEUE_NAME, {
@@ -149,9 +163,11 @@ async function main(): Promise<void> {
   });
 
   const { worker, deadLetterQueue } = createReviewWorker();
+  const staleReviewSweep = startStaleReviewSweep();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("Received shutdown signal, closing worker", { signal });
+    clearInterval(staleReviewSweep);
     try {
       await worker.close();
       await deadLetterQueue.close();

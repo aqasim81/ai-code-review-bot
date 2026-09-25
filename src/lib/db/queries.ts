@@ -114,6 +114,73 @@ interface ClaimExistingReviewInput {
 }
 
 /**
+ * An unfinished review whose processing started before `staleBefore`. Rows
+ * from before start times were recorded fall back to `createdAt`.
+ */
+function staleReviewFilter(staleBefore: Date) {
+  return {
+    status: { in: ["PROCESSING" as const, "PENDING" as const] },
+    OR: [
+      { processingStartedAt: { lt: staleBefore } },
+      { processingStartedAt: null, createdAt: { lt: staleBefore } },
+    ],
+  };
+}
+
+const STALE_REVIEW_BATCH_SIZE = 100;
+
+export async function findStaleReviewIds(
+  staleBefore: Date,
+): Promise<Result<ReviewId[], string>> {
+  try {
+    const reviews = await prisma.review.findMany({
+      where: staleReviewFilter(staleBefore),
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+      take: STALE_REVIEW_BATCH_SIZE,
+    });
+    return ok(reviews.map((review) => review.id as ReviewId));
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to find stale reviews: ${message}`);
+  }
+}
+
+/**
+ * Marks a stale review FAILED, drops its unposted findings and clears its claim
+ * token so an attempt that is somehow still running can no longer write.
+ * Returns false when the review stopped being stale (it was reclaimed).
+ */
+export async function failStaleReview(
+  reviewId: ReviewId,
+  staleBefore: Date,
+): Promise<Result<boolean, string>> {
+  try {
+    const failed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.review.updateMany({
+        where: { id: reviewId, ...staleReviewFilter(staleBefore) },
+        data: {
+          status: "FAILED",
+          summary: "Review failed: timed out without finishing",
+          issuesFound: 0,
+          claimToken: null,
+          completedAt: new Date(),
+        },
+      });
+      if (count === 0) return false;
+      await tx.reviewComment.deleteMany({ where: { reviewId } });
+      return true;
+    });
+    return ok(failed);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to expire stale review: ${message}`);
+  }
+}
+
+/**
  * Atomically claims an existing review for the given job and clears anything
  * left by the earlier attempt. A review can be claimed when it is FAILED, when
  * it is PROCESSING under the same queue job (that attempt is no longer
@@ -133,16 +200,7 @@ export async function claimExistingReview(
           OR: [
             { status: "FAILED" },
             { status: "PROCESSING", claimedByJobId: claim.jobId },
-            {
-              status: { in: ["PROCESSING", "PENDING"] },
-              OR: [
-                { processingStartedAt: { lt: claim.staleBefore } },
-                {
-                  processingStartedAt: null,
-                  createdAt: { lt: claim.staleBefore },
-                },
-              ],
-            },
+            staleReviewFilter(claim.staleBefore),
           ],
         },
         data: {

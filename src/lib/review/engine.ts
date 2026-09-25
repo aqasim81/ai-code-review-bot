@@ -19,6 +19,7 @@ import {
 } from "@/lib/review/comment-mapper";
 import { buildReviewContext } from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
+import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
 import type { ReviewEngineError } from "@/types/errors";
 import type { GitHubService, PullRequestReviewPayload } from "@/types/github";
@@ -35,12 +36,6 @@ import type {
   ReviewRequest,
   SupportedLanguage,
 } from "@/types/review";
-
-// A review PROCESSING for longer than this may be reclaimed by any job, not
-// just a retry of the job that claimed it. Chosen to be well beyond a normal
-// review run; a slower run that is still alive loses its claim token and stops
-// at its next write or before posting.
-const STALE_PROCESSING_REVIEW_MS = 30 * 60 * 1000;
 
 const SUPPORTED_LANGUAGES = new Set<string>([
   "typescript",
