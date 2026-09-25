@@ -142,6 +142,39 @@ describe("processReviewJob", () => {
     );
   });
 
+  it("reuses the job record when a stalled job re-runs without an attempt counted", async () => {
+    const job = createMockJob({
+      attemptsMade: 0,
+      data: {
+        type: "review-pr",
+        payload: {
+          installationId: 12345,
+          repositoryFullName: "test-owner/test-repo",
+          pullRequestNumber: 42,
+          commitSha: "abc123",
+        },
+        dbJobId: "existing-db-job",
+      },
+    });
+
+    await processReviewJob(job);
+
+    expect(createJobRecord).not.toHaveBeenCalled();
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      "existing-db-job",
+      "COMPLETED",
+    );
+  });
+
+  it("creates the job record on a retry when the first attempt could not", async () => {
+    const job = createMockJob({ attemptsMade: 1 });
+
+    await processReviewJob(job);
+
+    expect(createJobRecord).toHaveBeenCalledTimes(1);
+    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+  });
+
   it("marks job completed when REVIEW_ALREADY_EXISTS", async () => {
     vi.mocked(executeReview).mockResolvedValue(err("REVIEW_ALREADY_EXISTS"));
 
