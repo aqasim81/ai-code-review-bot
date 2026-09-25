@@ -31,6 +31,25 @@ import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
 import { err, ok } from "@/types/results";
 
+// A new file with enough added lines (~27k estimated tokens) that two of them
+// cannot share one 30k-token review chunk.
+function largeAddedFileDiff(filePath: string): string {
+  const lineCount = 1000;
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `+export const value${index} = "${"x".repeat(80)}";`,
+  );
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    "new file mode 100644",
+    "--- /dev/null",
+    `+++ b/${filePath}`,
+    `@@ -0,0 +1,${lineCount} @@`,
+    ...lines,
+    "",
+  ].join("\n");
+}
+
 const NEW_REVIEW_CLAIM = { reviewId: reviewId(), claimToken: "new-token" };
 
 function retryClaimFor(id: string) {
@@ -360,6 +379,27 @@ describe("executeReview — review pipeline", () => {
         event: "COMMENT",
       }),
     );
+  });
+
+  it("states the total finding count once when the review spans several chunks", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            `${largeAddedFileDiff("src/a.ts")}${largeAddedFileDiff("src/b.ts")}`,
+          ),
+        ),
+    });
+    const llm = createMockLlmService();
+
+    await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(2);
+    const body = vi.mocked(github.postPullRequestReview).mock.calls[0]?.[3]
+      .body;
+    expect(body).toContain("Found 2 issues in this review.");
+    expect(body).not.toContain("Found 1 issue");
   });
 
   it("marks the posted review body with a hidden marker for the review ID", async () => {
