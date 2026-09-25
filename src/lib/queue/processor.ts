@@ -133,11 +133,15 @@ async function buildReviewRequest(
   githubService: GitHubService,
 ): Promise<ReviewRequest> {
   const { type, payload } = job.data;
+  if (job.id === undefined) {
+    throw new Error("Review job has no ID; cannot claim a review for it");
+  }
   const baseRequest: ReviewRequest = {
     installationId: payload.installationId,
     repositoryFullName: payload.repositoryFullName,
     pullRequestNumber: payload.pullRequestNumber,
     commitSha: payload.commitSha,
+    jobId: job.id,
   };
 
   if (type !== "review-pr-delta") return baseRequest;

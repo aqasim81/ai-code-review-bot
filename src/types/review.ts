@@ -146,6 +146,8 @@ export interface ReviewRequest {
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;
+  /** Queue job running this review; stable across retries of the same job. */
+  readonly jobId: string;
   readonly filePathFilter?: readonly string[];
 }
 

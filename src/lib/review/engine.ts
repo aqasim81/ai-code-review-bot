@@ -1,10 +1,11 @@
+import type { ReviewStatus } from "@/generated/prisma/enums";
 import {
+  claimExistingReview,
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
   findRepositoryByFullName,
   markReviewCompleted,
-  resetFailedReviewForRetry,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
@@ -31,6 +32,10 @@ import type {
   ReviewRequest,
   SupportedLanguage,
 } from "@/types/review";
+
+// Longer than any real review run (the queue lock is 5 minutes), so a review
+// still PROCESSING after this is treated as abandoned by any job.
+const STALE_PROCESSING_REVIEW_MS = 30 * 60 * 1000;
 
 const SUPPORTED_LANGUAGES = new Set<string>([
   "typescript",
@@ -83,6 +88,7 @@ async function createNewReviewRecord(
     repositoryId,
     pullRequestNumber: request.pullRequestNumber,
     commitSha: request.commitSha,
+    claimedByJobId: request.jobId,
   });
   if (!createResult.success) {
     logger.error("Failed to create review record", {
@@ -93,37 +99,46 @@ async function createNewReviewRecord(
   return ok(createResult.data.id);
 }
 
-async function claimFailedReviewForRetry(
-  reviewId: ReviewId,
+async function claimExistingReviewForRetry(
+  existing: { id: ReviewId; status: ReviewStatus },
   request: ReviewRequest,
 ): Promise<Result<ReviewId, ReviewEngineError>> {
-  const { commitSha, pullRequestNumber } = request;
-  const resetResult = await resetFailedReviewForRetry(
-    reviewId,
+  const { commitSha, jobId, pullRequestNumber } = request;
+  const reviewId = existing.id;
+  const claimResult = await claimExistingReview(reviewId, {
+    jobId,
     pullRequestNumber,
-  );
-  if (!resetResult.success) {
-    logger.error("Failed to reset review for retry", {
+    staleBefore: new Date(Date.now() - STALE_PROCESSING_REVIEW_MS),
+  });
+  if (!claimResult.success) {
+    logger.error("Failed to claim existing review", {
       reviewId,
-      error: resetResult.error,
+      error: claimResult.error,
     });
     return err("REVIEW_DB_ERROR");
   }
-  if (!resetResult.data) {
-    logger.info("Failed review already claimed by another job, skipping", {
+  if (!claimResult.data) {
+    logger.info("Review is owned by another job, skipping", {
       reviewId,
+      status: existing.status,
       commitSha,
     });
     return err("REVIEW_ALREADY_EXISTS");
   }
-  logger.info("Retrying failed review", { reviewId, commitSha });
+  logger.info("Re-running existing review", {
+    reviewId,
+    previousStatus: existing.status,
+    commitSha,
+    jobId,
+  });
   return ok(reviewId);
 }
 
 /**
- * Returns the review to work on: a new PROCESSING review, or a FAILED review
- * for the same commit reset for a retry. Any other existing review means the
- * commit is already reviewed or in progress.
+ * Returns the review to work on: a new PROCESSING review, or an existing
+ * review for the same commit claimed for this job (FAILED, abandoned by an
+ * earlier attempt of this job, or stale). A COMPLETED review, or one another
+ * job still owns, means there is nothing to do.
  */
 async function claimReviewRecord(
   repositoryId: RepositoryId,
@@ -142,8 +157,8 @@ async function claimReviewRecord(
 
   const existing = existingResult.data;
   if (!existing) return createNewReviewRecord(repositoryId, request);
-  if (existing.status === "FAILED") {
-    return claimFailedReviewForRetry(existing.id, request);
+  if (existing.status !== "COMPLETED") {
+    return claimExistingReviewForRetry(existing, request);
   }
 
   logger.info("Review already exists for commit, skipping", {

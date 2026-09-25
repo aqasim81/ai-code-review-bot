@@ -105,23 +105,48 @@ export async function findExistingReviewByCommitSha(
   }
 }
 
+interface ReviewClaim {
+  readonly jobId: string;
+  readonly pullRequestNumber: number;
+  readonly staleBefore: Date;
+}
+
 /**
- * Claims a FAILED review for a retry: moves it back to PROCESSING under the
- * retrying job's pull request and clears any comments left by the failed
- * attempt. Returns false when the review is no longer FAILED (another job
- * already claimed it).
+ * Atomically claims an existing review for the given job and clears anything
+ * left by the earlier attempt. A review can be claimed when it is FAILED, when
+ * it is PROCESSING under the same queue job (that attempt is no longer
+ * running), or when it has been PROCESSING or PENDING since before
+ * `staleBefore`. Returns false when another job still owns the review.
  */
-export async function resetFailedReviewForRetry(
+export async function claimExistingReview(
   reviewId: ReviewId,
-  pullRequestNumber: number,
+  claim: ReviewClaim,
 ): Promise<Result<boolean, string>> {
   try {
     const claimed = await prisma.$transaction(async (tx) => {
       const { count } = await tx.review.updateMany({
-        where: { id: reviewId, status: "FAILED" },
+        where: {
+          id: reviewId,
+          OR: [
+            { status: "FAILED" },
+            { status: "PROCESSING", claimedByJobId: claim.jobId },
+            {
+              status: { in: ["PROCESSING", "PENDING"] },
+              OR: [
+                { processingStartedAt: { lt: claim.staleBefore } },
+                {
+                  processingStartedAt: null,
+                  createdAt: { lt: claim.staleBefore },
+                },
+              ],
+            },
+          ],
+        },
         data: {
           status: "PROCESSING",
-          pullRequestNumber,
+          claimedByJobId: claim.jobId,
+          processingStartedAt: new Date(),
+          pullRequestNumber: claim.pullRequestNumber,
           summary: null,
           issuesFound: 0,
           processingTimeMs: null,
@@ -136,7 +161,7 @@ export async function resetFailedReviewForRetry(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to reset review for retry: ${message}`);
+    return err(`Failed to claim review: ${message}`);
   }
 }
 
@@ -144,6 +169,7 @@ interface CreateReviewInput {
   repositoryId: RepositoryId;
   pullRequestNumber: number;
   commitSha: string;
+  claimedByJobId: string;
 }
 
 export async function createReviewRecord(
@@ -156,6 +182,8 @@ export async function createReviewRecord(
         pullRequestNumber: input.pullRequestNumber,
         commitSha: input.commitSha,
         status: "PROCESSING",
+        claimedByJobId: input.claimedByJobId,
+        processingStartedAt: new Date(),
       },
     });
     return ok({ id: review.id as ReviewId });

@@ -239,6 +239,7 @@ export function createReviewRequest(
     repositoryFullName: "test-owner/test-repo",
     pullRequestNumber: 42,
     commitSha: "abc123def456",
+    jobId: "job-1",
     ...overrides,
   };
 }

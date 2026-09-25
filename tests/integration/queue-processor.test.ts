@@ -99,6 +99,7 @@ describe("processReviewJob", () => {
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: "abc123",
+        jobId: "job-123",
       }),
       expect.anything(),
       expect.anything(),
