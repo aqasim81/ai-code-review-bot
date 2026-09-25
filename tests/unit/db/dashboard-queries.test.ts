@@ -147,6 +147,35 @@ describe("dashboard queries are limited to the user's access scope", () => {
     expect(args?.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
+  it("returns an empty page for a cursor outside the scope", async () => {
+    prismaMock.review.findFirst.mockResolvedValueOnce(null);
+
+    const result = await listReviewsInScope({
+      scope: SCOPE,
+      cursor: "other-review",
+    });
+
+    expect(whereOf(prismaMock.review.findFirst)).toEqual({
+      id: "other-review",
+      repository: IN_SCOPE,
+    });
+    expect(prismaMock.review.findMany).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: true,
+      data: { reviews: [], nextCursor: null },
+    });
+  });
+
+  it("pages from a cursor inside the scope", async () => {
+    prismaMock.review.findFirst.mockResolvedValueOnce({ id: "own-review" });
+
+    await listReviewsInScope({ scope: SCOPE, cursor: "own-review" });
+
+    const args = prismaMock.review.findMany.mock.calls[0]?.[0];
+    expect(args?.cursor).toEqual({ id: "own-review" });
+    expect(args?.skip).toBe(1);
+  });
+
   it("loads a review's details only inside the scope", async () => {
     await getReviewWithCommentsInScope("review-1" as ReviewId, SCOPE);
 

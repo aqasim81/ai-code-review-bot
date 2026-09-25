@@ -651,12 +651,23 @@ export async function listReviewsInScope(
   >
 > {
   const limit = input.limit ?? 20;
+  const repository = repositoryInScopeWhere(input.scope);
 
   try {
+    // Prisma locates the cursor row without the where filter, so a cursor
+    // outside the scope would reveal where that review sits in time.
+    if (input.cursor) {
+      const cursorReview = await prisma.review.findFirst({
+        where: { id: input.cursor, repository },
+        select: { id: true },
+      });
+      if (!cursorReview) return ok({ reviews: [], nextCursor: null });
+    }
+
     const reviews = await prisma.review.findMany({
       where: {
         repository: {
-          ...repositoryInScopeWhere(input.scope),
+          ...repository,
           ...(input.repositoryId ? { id: input.repositoryId } : {}),
         },
         ...(input.status ? { status: input.status } : {}),
