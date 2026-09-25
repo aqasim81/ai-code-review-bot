@@ -3,6 +3,7 @@ import type {
   AccountType,
   InstallationStatus,
 } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import type {
   CommentCategory,
   CommentSeverity,
@@ -234,9 +235,21 @@ interface CreateReviewInput {
   claimedByJobId: string;
 }
 
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
+}
+
+/**
+ * Creates a PROCESSING review claimed by the given job. Returns null when a
+ * review for the same repository and commit already exists, i.e. another job
+ * created it first.
+ */
 export async function createReviewRecord(
   input: CreateReviewInput,
-): Promise<Result<ReviewClaimRef, string>> {
+): Promise<Result<ReviewClaimRef | null, string>> {
   const claimToken = randomUUID();
   try {
     const review = await prisma.review.create({
@@ -252,6 +265,7 @@ export async function createReviewRecord(
     });
     return ok({ reviewId: review.id as ReviewId, claimToken });
   } catch (error) {
+    if (isUniqueConstraintViolation(error)) return ok(null);
     const message =
       error instanceof Error ? error.message : "Unknown database error";
     return err(`Failed to create review record: ${message}`);

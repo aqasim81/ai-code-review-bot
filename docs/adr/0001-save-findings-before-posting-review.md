@@ -21,7 +21,9 @@ retryable with the old order would have allowed a retry to post the same comment
   (a single-row update).
 - `claimReviewRecord` handles an existing review for the same commit:
   - none → create a PROCESSING review, recording the queue job ID (`claimedByJobId`) and
-    `processingStartedAt`;
+    `processingStartedAt`. If another job creates it first, the insert hits the
+    `(repositoryId, commitSha)` unique key; `createReviewRecord` maps Prisma's `P2002` to "already
+    exists" and the job returns `REVIEW_ALREADY_EXISTS` instead of a database error (#24);
   - COMPLETED → `REVIEW_ALREADY_EXISTS`;
   - otherwise → `claimExistingReview` tries to take it over, in one transaction. The update is
     guarded so that it succeeds only when the review is FAILED; or PROCESSING under the same

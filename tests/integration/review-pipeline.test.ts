@@ -25,6 +25,7 @@ import {
   markReviewCompleted,
   saveReviewFindings,
 } from "@/lib/db/queries";
+import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
@@ -181,6 +182,23 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_ALREADY_EXISTS");
     expect(github.fetchPullRequestDiff).not.toHaveBeenCalled();
+  });
+
+  it("returns REVIEW_ALREADY_EXISTS without an error when another job created the review first", async () => {
+    vi.mocked(createReviewRecord).mockResolvedValue(ok(null));
+    const github = createMockGitHubService();
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_ALREADY_EXISTS");
+    expect(github.fetchPullRequestDiff).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it("records the claiming job when creating a new review", async () => {
