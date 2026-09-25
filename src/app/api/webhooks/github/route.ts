@@ -29,6 +29,7 @@ function handlerFailureResponse(
   context: { deliveryId: string; eventName: string },
 ): NextResponse {
   if (error === "INVALID_PAYLOAD") {
+    logger.warn("Webhook payload rejected", context);
     return NextResponse.json(
       { error: "Invalid webhook payload" },
       { status: 400 },
@@ -59,6 +60,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const rawBody = await request.text();
+  if (rawBody.length === 0) {
+    logger.warn("Webhook request has an empty body", { deliveryId, eventName });
+    return NextResponse.json({ error: "Empty webhook body" }, { status: 400 });
+  }
 
   const isValid = await webhooks.verify(rawBody, signature);
   if (!isValid) {

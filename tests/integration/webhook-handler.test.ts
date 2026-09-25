@@ -249,6 +249,16 @@ describe("handlePullRequestEvent", () => {
     expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
+  it("acknowledges a non-reviewable action without validating the rest of the payload", async () => {
+    const result = await handlePullRequestEvent({
+      action: "labeled",
+      installation: { id: 12345 },
+    });
+
+    expect(result.success).toBe(true);
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
+  });
+
   it("returns INVALID_PAYLOAD for a reviewable action without a pull_request", async () => {
     const result = await handlePullRequestEvent(
       createPrPayload({ action: "reopened", pull_request: undefined }),

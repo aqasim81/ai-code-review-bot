@@ -29,8 +29,9 @@ const installationDeletedPayloadSchema = z.object({
   installation: z.object({ id: z.number().int() }),
 });
 
-const pullRequestEventPayloadSchema = z.object({
-  action: z.string(),
+const pullRequestActionSchema = z.object({ action: z.string() });
+
+const pullRequestEventPayloadSchema = pullRequestActionSchema.extend({
   pull_request: z.object({
     number: z.number().int().positive(),
     head: z.object({ sha: z.string().min(1) }),
@@ -152,6 +153,16 @@ export async function handlePullRequestEvent(
 ): Promise<
   Result<{ acknowledged: boolean; jobId?: string }, WebhookHandlerError>
 > {
+  const actionResult = parseWebhookPayloadShape(
+    pullRequestActionSchema,
+    rawPayload,
+    "pull_request",
+  );
+  if (!actionResult.success) return actionResult;
+  if (!REVIEWABLE_ACTIONS.has(actionResult.data.action)) {
+    return ok({ acknowledged: true });
+  }
+
   const parsed = parseWebhookPayloadShape(
     pullRequestEventPayloadSchema,
     rawPayload,
@@ -159,10 +170,6 @@ export async function handlePullRequestEvent(
   );
   if (!parsed.success) return parsed;
   const payload = parsed.data;
-
-  if (!REVIEWABLE_ACTIONS.has(payload.action)) {
-    return ok({ acknowledged: true });
-  }
   const installationId = payload.installation.id;
 
   logger.info("Processing pull_request event", {

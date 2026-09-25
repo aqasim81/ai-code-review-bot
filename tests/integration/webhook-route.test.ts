@@ -143,6 +143,18 @@ describe("POST /api/webhooks/github", () => {
     },
   );
 
+  it("returns 400 when a request has an empty body", async () => {
+    const request = await buildWebhookRequest({
+      body: "",
+      signature: `sha256=${"0".repeat(64)}`,
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
+  });
+
   it("enqueues a review for an 'opened' pull request", async () => {
     const request = await buildWebhookRequest({
       body: createPullRequestBody(),
