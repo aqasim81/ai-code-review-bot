@@ -75,10 +75,18 @@ async function lookupRepository(
     });
     return err("REVIEW_DB_ERROR");
   }
-  if (!repoResult.data?.isEnabled) {
-    logger.info("Repository is not reviewable, skipping", {
+  if (!repoResult.data) {
+    // Also covers a missed installation.created webhook, so keep it visible.
+    logger.warn("Repository not reviewable, skipping", {
       repository: request.repositoryFullName,
-      reason: repoResult.data ? "disabled" : "installation not active",
+      githubInstallationId: request.installationId,
+      reason: "installation unknown or inactive, or repository removed",
+    });
+    return err("REVIEW_REPOSITORY_UNAVAILABLE");
+  }
+  if (!repoResult.data.isEnabled) {
+    logger.info("Reviews are disabled for this repository, skipping", {
+      repository: request.repositoryFullName,
     });
     return err("REVIEW_REPOSITORY_UNAVAILABLE");
   }

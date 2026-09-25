@@ -192,16 +192,18 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     attempt: job.attemptsMade + 1,
   });
 
+  const dbJobId = await getOrCreateDbJobId(job);
+
   // Jobs queued before the repository ID was added to the payload cannot be
   // matched to a repository safely; the next push or reopen queues a new one.
   if (typeof payload.githubRepoId !== "number") {
     logger.warn("Review job has no repository ID, skipping", {
       jobId: job.id,
     });
+    await markJobCompleted(dbJobId);
     return;
   }
 
-  const dbJobId = await getOrCreateDbJobId(job);
   const githubService = createGitHubServiceFromEnv(payload.installationId);
   const llmService = createLlmClient();
   const request = await buildReviewRequest(job, jobId, githubService);

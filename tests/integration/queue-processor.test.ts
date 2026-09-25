@@ -216,7 +216,7 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(executeReview).not.toHaveBeenCalled();
-    expect(createJobRecord).not.toHaveBeenCalled();
+    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
   });
 
   it("marks job completed when another attempt holds the review (REVIEW_CLAIM_LOST)", async () => {

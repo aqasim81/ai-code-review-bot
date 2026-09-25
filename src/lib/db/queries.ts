@@ -52,7 +52,7 @@ async function saveInstallationRepositories(
             githubRepoId: repo.githubRepoId,
           },
         },
-        update: { fullName: repo.fullName },
+        update: { fullName: repo.fullName, removedAt: null },
         create: { installationId: saved.id, ...repo },
       });
     }
@@ -98,19 +98,22 @@ export async function addRepositoriesToInstallation(
 }
 
 /**
- * Deletes repositories removed from an installation, with their reviews. A
- * repository added back later starts fresh and enabled.
+ * Marks repositories removed from an installation. Rows are kept rather than
+ * deleted so a review job queued before the removal cannot recreate them;
+ * adding the repository back clears the mark and keeps its settings.
  */
 export async function removeRepositoriesFromInstallation(
   githubInstallationId: number,
   githubRepoIds: readonly number[],
 ): Promise<Result<{ removedCount: number }, string>> {
   try {
-    const { count } = await prisma.repository.deleteMany({
+    const { count } = await prisma.repository.updateMany({
       where: {
         githubRepoId: { in: [...githubRepoIds] },
         installation: { githubInstallationId },
+        removedAt: null,
       },
+      data: { removedAt: new Date() },
     });
     return ok({ removedCount: count });
   } catch (error) {
@@ -146,16 +149,26 @@ interface RepositoryForReviewInput {
   readonly fullName: string;
 }
 
+type RepositoryForReview = { id: RepositoryId; isEnabled: boolean };
+
+const REVIEW_REPOSITORY_SELECT = {
+  id: true,
+  isEnabled: true,
+  fullName: true,
+  removedAt: true,
+} as const;
+
 /**
  * Finds the repository a review job is for by its GitHub ID under the job's
  * installation, so renames and old installations cannot mislead it. The
  * stored name follows GitHub's. A missing row is created: a signed
  * pull_request webhook proves the installation can see the repository.
- * Returns null when the installation is unknown or not active.
+ * Returns null when the installation is unknown or not active, or when the
+ * repository was removed from the installation.
  */
 export async function findOrCreateRepositoryForReview(
   input: RepositoryForReviewInput,
-): Promise<Result<{ id: RepositoryId; isEnabled: boolean } | null, string>> {
+): Promise<Result<RepositoryForReview | null, string>> {
   try {
     const installation = await prisma.installation.findUnique({
       where: { githubInstallationId: input.githubInstallationId },
@@ -163,29 +176,62 @@ export async function findOrCreateRepositoryForReview(
     });
     if (!installation || installation.status !== "ACTIVE") return ok(null);
 
-    const repository = await prisma.repository.upsert({
-      where: {
-        installationId_githubRepoId: {
-          installationId: installation.id,
-          githubRepoId: input.githubRepoId,
-        },
-      },
-      update: { fullName: input.fullName },
-      create: {
+    const key = {
+      installationId_githubRepoId: {
         installationId: installation.id,
         githubRepoId: input.githubRepoId,
-        fullName: input.fullName,
       },
-      select: { id: true, isEnabled: true },
-    });
+    };
+    const existing =
+      (await prisma.repository.findUnique({
+        where: key,
+        select: REVIEW_REPOSITORY_SELECT,
+      })) ?? (await createRepositoryForReview(installation.id, input));
+    if (!existing || existing.removedAt) return ok(null);
+
+    if (existing.fullName !== input.fullName) {
+      await prisma.repository.update({
+        where: key,
+        data: { fullName: input.fullName },
+      });
+    }
     return ok({
-      id: repository.id as RepositoryId,
-      isEnabled: repository.isEnabled,
+      id: existing.id as RepositoryId,
+      isEnabled: existing.isEnabled,
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
     return err(`Failed to find repository: ${message}`);
+  }
+}
+
+// Two jobs for a repository without a row can race to create it; the loser
+// reads the winner's row instead of failing.
+async function createRepositoryForReview(
+  installationId: string,
+  input: RepositoryForReviewInput,
+) {
+  try {
+    return await prisma.repository.create({
+      data: {
+        installationId,
+        githubRepoId: input.githubRepoId,
+        fullName: input.fullName,
+      },
+      select: REVIEW_REPOSITORY_SELECT,
+    });
+  } catch (error) {
+    if (!isUniqueConstraintViolation(error)) throw error;
+    return prisma.repository.findUnique({
+      where: {
+        installationId_githubRepoId: {
+          installationId,
+          githubRepoId: input.githubRepoId,
+        },
+      },
+      select: REVIEW_REPOSITORY_SELECT,
+    });
   }
 }
 
@@ -600,6 +646,7 @@ function repositoryInScopeWhere(
 ): Prisma.RepositoryWhereInput {
   return {
     githubRepoId: { in: [...githubRepoIds] },
+    removedAt: null,
     installation: {
       githubInstallationId: { in: [...scope.githubInstallationIds] },
       status: "ACTIVE",

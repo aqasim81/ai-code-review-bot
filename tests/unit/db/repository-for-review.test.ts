@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   installation: { findUnique: vi.fn() },
-  repository: { upsert: vi.fn() },
+  repository: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
 }));
 
 vi.mock("@/lib/db/prisma-client", () => ({ prisma: prismaMock }));
 
+import { Prisma } from "@/generated/prisma/client";
 import { findOrCreateRepositoryForReview } from "@/lib/db/queries";
 
 const INPUT = {
@@ -14,13 +15,26 @@ const INPUT = {
   githubRepoId: 555,
   fullName: "acme/renamed-app",
 };
+const KEY = {
+  installationId_githubRepoId: { installationId: "inst-1", githubRepoId: 555 },
+};
+
+function row(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "repo-1",
+    isEnabled: true,
+    fullName: "acme/renamed-app",
+    removedAt: null,
+    ...overrides,
+  };
+}
 
 describe("findOrCreateRepositoryForReview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prismaMock.repository.upsert.mockResolvedValue({
-      id: "repo-1",
-      isEnabled: true,
+    prismaMock.installation.findUnique.mockResolvedValue({
+      id: "inst-1",
+      status: "ACTIVE",
     });
   });
 
@@ -33,7 +47,7 @@ describe("findOrCreateRepositoryForReview", () => {
     const result = await findOrCreateRepositoryForReview(INPUT);
 
     expect(result).toEqual({ success: true, data: null });
-    expect(prismaMock.repository.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.repository.findUnique).not.toHaveBeenCalled();
   });
 
   it("returns nothing for an unknown installation", async () => {
@@ -45,35 +59,71 @@ describe("findOrCreateRepositoryForReview", () => {
   });
 
   it("matches by GitHub repository ID under the job's installation and follows renames", async () => {
-    prismaMock.installation.findUnique.mockResolvedValue({
-      id: "inst-1",
-      status: "ACTIVE",
-    });
+    prismaMock.repository.findUnique.mockResolvedValue(
+      row({ fullName: "acme/old-name" }),
+    );
 
     const result = await findOrCreateRepositoryForReview(INPUT);
 
-    expect(prismaMock.installation.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { githubInstallationId: 12345 } }),
+    expect(prismaMock.repository.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: KEY }),
     );
-    expect(prismaMock.repository.upsert).toHaveBeenCalledWith(
+    expect(prismaMock.repository.update).toHaveBeenCalledWith({
+      where: KEY,
+      data: { fullName: "acme/renamed-app" },
+    });
+    expect(result).toEqual({
+      success: true,
+      data: { id: "repo-1", isEnabled: true },
+    });
+  });
+
+  it("never brings back a repository removed from the installation", async () => {
+    prismaMock.repository.findUnique.mockResolvedValue(
+      row({ removedAt: new Date() }),
+    );
+
+    const result = await findOrCreateRepositoryForReview(INPUT);
+
+    expect(result).toEqual({ success: true, data: null });
+    expect(prismaMock.repository.create).not.toHaveBeenCalled();
+    expect(prismaMock.repository.update).not.toHaveBeenCalled();
+  });
+
+  it("creates the row when the repository has none yet", async () => {
+    prismaMock.repository.findUnique.mockResolvedValue(null);
+    prismaMock.repository.create.mockResolvedValue(row());
+
+    const result = await findOrCreateRepositoryForReview(INPUT);
+
+    expect(prismaMock.repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          installationId_githubRepoId: {
-            installationId: "inst-1",
-            githubRepoId: 555,
-          },
-        },
-        update: { fullName: "acme/renamed-app" },
-        create: {
+        data: {
           installationId: "inst-1",
           githubRepoId: 555,
           fullName: "acme/renamed-app",
         },
       }),
     );
+    expect(result.success && result.data?.id).toBe("repo-1");
+  });
+
+  it("reads the other job's row when two jobs create it at once", async () => {
+    prismaMock.repository.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(row({ id: "repo-winner" }));
+    prismaMock.repository.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("unique", {
+        code: "P2002",
+        clientVersion: "7",
+      }),
+    );
+
+    const result = await findOrCreateRepositoryForReview(INPUT);
+
     expect(result).toEqual({
       success: true,
-      data: { id: "repo-1", isEnabled: true },
+      data: { id: "repo-winner", isEnabled: true },
     });
   });
 

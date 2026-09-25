@@ -6,7 +6,7 @@ const tx = vi.hoisted(() => ({
 }));
 const prismaMock = vi.hoisted(() => ({
   installation: { updateMany: vi.fn() },
-  repository: { deleteMany: vi.fn() },
+  repository: { updateMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 
@@ -35,7 +35,7 @@ describe("installation lifecycle queries", () => {
     tx.repository.upsert.mockResolvedValue({});
   });
 
-  it("adds repositories without reviving a suspended or deleted installation", async () => {
+  it("adds repositories back without reviving a suspended or deleted installation", async () => {
     const result = await addRepositoriesToInstallation(INSTALLATION, [
       { githubRepoId: 200, fullName: "acme/new-repo" },
     ]);
@@ -46,6 +46,7 @@ describe("installation lifecycle queries", () => {
     expect(upsert?.create).toMatchObject({ status: "ACTIVE" });
     expect(tx.repository.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
+        update: { fullName: "acme/new-repo", removedAt: null },
         where: {
           installationId_githubRepoId: {
             installationId: "inst-1",
@@ -64,16 +65,18 @@ describe("installation lifecycle queries", () => {
     });
   });
 
-  it("removes only the named repositories of that installation", async () => {
-    prismaMock.repository.deleteMany.mockResolvedValue({ count: 2 });
+  it("marks only the named repositories of that installation as removed", async () => {
+    prismaMock.repository.updateMany.mockResolvedValue({ count: 2 });
 
     const result = await removeRepositoriesFromInstallation(12345, [300, 301]);
 
-    expect(prismaMock.repository.deleteMany).toHaveBeenCalledWith({
+    expect(prismaMock.repository.updateMany).toHaveBeenCalledWith({
       where: {
         githubRepoId: { in: [300, 301] },
         installation: { githubInstallationId: 12345 },
+        removedAt: null,
       },
+      data: { removedAt: expect.any(Date) },
     });
     expect(result).toEqual({ success: true, data: { removedCount: 2 } });
   });
@@ -95,7 +98,7 @@ describe("installation lifecycle queries", () => {
   });
 
   it("returns an error when the database fails", async () => {
-    prismaMock.repository.deleteMany.mockRejectedValue(new Error("down"));
+    prismaMock.repository.updateMany.mockRejectedValue(new Error("down"));
 
     const result = await removeRepositoriesFromInstallation(12345, [300]);
 
