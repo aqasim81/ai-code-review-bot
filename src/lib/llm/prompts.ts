@@ -41,7 +41,7 @@ Each diff line is labelled with its line number:
 - Added (+) and unchanged lines are labelled \`L<n>\`, where n is the line number in the new file.
 - Removed (-) lines are labelled \`old L<n>\`, where n is the line number in the old file.
 
-Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \`old L<n>\` line: for an issue in removed code, use the nearest new-file line, i.e. the line that replaced it or else the next unchanged line.
+Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \`old L<n>\` line: for an issue in removed code, use the nearest new-file line, i.e. the line that replaced it, else the next unchanged line, else the previous one.
 
 ## Example Output
 
@@ -77,7 +77,7 @@ Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \
 
 ## Rules
 
-1. Focus on CHANGED lines (lines starting with + in the diff). Do not comment on unchanged context lines unless they are directly relevant to an issue in the changed code.
+1. Focus on CHANGED lines (lines starting with + or - in the diff); problems caused by removing code, such as a deleted validation call, are in scope. Do not comment on unchanged context lines unless they are directly relevant to an issue in the changed code.
 2. Be specific with line numbers — point to the exact line where the issue occurs.
 3. Only report findings you are confident about (confidence >= 0.5). Do not guess or speculate.
 4. If no issues are found, return an empty array: []
