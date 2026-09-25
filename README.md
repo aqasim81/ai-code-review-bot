@@ -40,7 +40,7 @@ GitHub Webhook
                          └────────────┘
 ```
 
-**Data flow:** Webhook → Validate Signature → Enqueue Job → Worker: Fetch Diff → Parse AST → Build Context → LLM Analysis → Map Comments → Post Review → Save to DB
+**Data flow:** Webhook → Validate Signature → Enqueue Job → Worker: Fetch Diff → Parse AST → Build Context → LLM Analysis → Map Comments → Save Findings → Post Review → Mark Completed
 
 ## Tech Stack
 

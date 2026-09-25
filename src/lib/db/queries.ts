@@ -89,17 +89,54 @@ export async function findRepositoryByFullName(
 export async function findExistingReviewByCommitSha(
   repositoryId: RepositoryId,
   commitSha: string,
-): Promise<Result<{ id: ReviewId } | null, string>> {
+): Promise<Result<{ id: ReviewId; status: ReviewStatus } | null, string>> {
   try {
     const review = await prisma.review.findUnique({
       where: { repositoryId_commitSha: { repositoryId, commitSha } },
-      select: { id: true },
+      select: { id: true, status: true },
     });
-    return ok(review ? { id: review.id as ReviewId } : null);
+    return ok(
+      review ? { id: review.id as ReviewId, status: review.status } : null,
+    );
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
     return err(`Failed to check existing review: ${message}`);
+  }
+}
+
+/**
+ * Claims a FAILED review for a retry: moves it back to PROCESSING under the
+ * retrying job's pull request and clears any comments left by the failed
+ * attempt. Returns false when the review is no longer FAILED (another job
+ * already claimed it).
+ */
+export async function resetFailedReviewForRetry(
+  reviewId: ReviewId,
+  pullRequestNumber: number,
+): Promise<Result<boolean, string>> {
+  try {
+    const claimed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.review.updateMany({
+        where: { id: reviewId, status: "FAILED" },
+        data: {
+          status: "PROCESSING",
+          pullRequestNumber,
+          summary: null,
+          issuesFound: 0,
+          processingTimeMs: null,
+          completedAt: null,
+        },
+      });
+      if (count === 0) return false;
+      await tx.reviewComment.deleteMany({ where: { reviewId } });
+      return true;
+    });
+    return ok(claimed);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to reset review for retry: ${message}`);
   }
 }
 
@@ -140,16 +177,16 @@ interface SaveReviewCommentInput {
   githubCommentId: string | null;
 }
 
-interface CompleteReviewInput {
+interface SaveReviewFindingsInput {
   reviewId: ReviewId;
   summary: string;
   issuesFound: number;
-  processingTimeMs: number;
   comments: SaveReviewCommentInput[];
 }
 
-export async function completeReviewWithComments(
-  input: CompleteReviewInput,
+/** Saves the findings and summary; the review stays PROCESSING until posted. */
+export async function saveReviewFindings(
+  input: SaveReviewFindingsInput,
 ): Promise<Result<void, string>> {
   try {
     await prisma.$transaction([
@@ -161,13 +198,7 @@ export async function completeReviewWithComments(
       }),
       prisma.review.update({
         where: { id: input.reviewId },
-        data: {
-          status: "COMPLETED",
-          summary: input.summary,
-          issuesFound: input.issuesFound,
-          processingTimeMs: input.processingTimeMs,
-          completedAt: new Date(),
-        },
+        data: { summary: input.summary, issuesFound: input.issuesFound },
       }),
     ]);
     return ok(undefined);
@@ -178,19 +209,44 @@ export async function completeReviewWithComments(
   }
 }
 
+export async function markReviewCompleted(
+  reviewId: ReviewId,
+  processingTimeMs: number,
+): Promise<Result<void, string>> {
+  try {
+    await prisma.review.update({
+      where: { id: reviewId },
+      data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
+    });
+    return ok(undefined);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to mark review completed: ${message}`);
+  }
+}
+
+/**
+ * Marks a review FAILED and drops any findings saved before the failure, since
+ * they may never have been posted to GitHub.
+ */
 export async function failReview(
   reviewId: ReviewId,
   errorMessage: string,
 ): Promise<Result<void, string>> {
   try {
-    await prisma.review.update({
-      where: { id: reviewId },
-      data: {
-        status: "FAILED",
-        summary: `Review failed: ${errorMessage}`,
-        completedAt: new Date(),
-      },
-    });
+    await prisma.$transaction([
+      prisma.reviewComment.deleteMany({ where: { reviewId } }),
+      prisma.review.update({
+        where: { id: reviewId },
+        data: {
+          status: "FAILED",
+          summary: `Review failed: ${errorMessage}`,
+          issuesFound: 0,
+          completedAt: new Date(),
+        },
+      }),
+    ]);
     return ok(undefined);
   } catch (error) {
     const message =
