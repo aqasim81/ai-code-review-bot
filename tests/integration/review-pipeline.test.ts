@@ -304,7 +304,28 @@ describe("executeReview — review pipeline", () => {
     expect(result.error).toBe("REVIEW_DIFF_FETCH_FAILED");
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
-      expect.stringContaining("diff"),
+      "Failed to fetch PR diff",
+    );
+  });
+
+  it("fails the review with REVIEW_DIFF_PARSE_FAILED when the diff is empty", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(ok("   ")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_DIFF_PARSE_FAILED",
+    });
+    expect(failReview).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      "Failed to parse PR diff",
     );
   });
 
@@ -323,7 +344,10 @@ describe("executeReview — review pipeline", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("REVIEW_LLM_FAILED");
-    expect(failReview).toHaveBeenCalled();
+    expect(failReview).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      "LLM analysis failed",
+    );
   });
 
   it.each([
@@ -816,6 +840,28 @@ describe("executeReview — review pipeline", () => {
     expect(isReviewClaimCurrent).toHaveBeenCalledWith(NEW_REVIEW_CLAIM);
     expect(github.postPullRequestReview).not.toHaveBeenCalled();
     expect(failReview).not.toHaveBeenCalled();
+  });
+
+  it("fails the review without posting when the claim check before posting errors", async () => {
+    vi.mocked(isReviewClaimCurrent).mockResolvedValue(err("connection lost"));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({ success: false, error: "REVIEW_DB_ERROR" });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      "Failed to check review claim",
+    );
   });
 
   it("returns REVIEW_CLAIM_LOST when completing finds the claim lost", async () => {
