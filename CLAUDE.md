@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 6: Testing & Polish** — Complete. All 6 phases done. 218 tests across 15 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
+**Phase 6: Testing & Polish** — Complete. All 6 phases done. 221 tests across 16 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide.
 
 ## Tech Stack
 
@@ -97,12 +97,12 @@ pnpm test             # Vitest
 
 ## Invariants
 
-1. `src/lib/` has zero Next.js imports (pure TypeScript business logic).
+1. `src/lib/` has zero Next.js imports (pure TypeScript business logic). Enforced by a Biome `noRestrictedImports` override.
 2. Webhook signatures are validated before any job is enqueued.
-3. All database access goes through `src/lib/db/queries.ts`.
+3. All database access goes through `src/lib/db/queries.ts`. Enforced by a Biome `noRestrictedImports` override: only `src/lib/db/` may import the Prisma client (type-only enum imports from `@/generated/prisma/enums` are fine).
 4. Business logic returns the Result type and never throws, except env validation at startup (`src/lib/env.ts`) and the queue processor, which throws so BullMQ retries; external calls are wrapped at the boundary.
-5. Configuration only through `src/lib/env.ts`; never raw `process.env` in `src/`.
-6. No AI or LLM provider names in code, comments, prompts or user-facing strings, except model IDs, the SDK dependency and its API-key env var.
+5. Configuration only through `src/lib/env.ts`; never raw `process.env` in `src/`. Enforced by Biome `noProcessEnv`, turned off only for `src/lib/env.ts`.
+6. No AI or LLM provider names in code, comments, prompts or user-facing strings, except model IDs, the SDK dependency and its API-key env var. Enforced by `tests/invariants/provider-names.test.ts`, which scans `src/` and `worker/`; that test has to name what it looks for and is the one documented exception.
 7. No unused imports or variables (Biome, enforced in CI).
 
 ## Workflow
