@@ -415,44 +415,20 @@ async function completeReviewEarly(
   return ok({ reviewId, issuesFound: 0, processingTimeMs, summary });
 }
 
-export async function executeReview(
-  request: ReviewRequest,
-  githubService: GitHubService,
-  llmService: LLMService,
+interface ReviewStepsContext {
+  readonly reviewId: ReviewId;
+  readonly request: ReviewRequest;
+  readonly owner: string;
+  readonly repo: string;
+  readonly githubService: GitHubService;
+  readonly llmService: LLMService;
+  readonly startTime: number;
+}
+
+async function runReviewSteps(
+  context: ReviewStepsContext,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
-  const startTime = Date.now();
-
-  const nameResult = parseRepositoryFullNameAsResult(
-    request.repositoryFullName,
-  );
-  if (!nameResult.success) return nameResult;
-  const { owner, repo } = nameResult.data;
-
-  logger.info("Starting review", {
-    repository: request.repositoryFullName,
-    pullRequest: request.pullRequestNumber,
-    commitSha: request.commitSha,
-  });
-
-  const lookupResult = await lookupRepositoryAndCheckIdempotency(
-    request.repositoryFullName,
-    request.commitSha,
-  );
-  if (!lookupResult.success) return lookupResult;
-  const { repositoryId } = lookupResult.data;
-
-  const createResult = await createReviewRecord({
-    repositoryId,
-    pullRequestNumber: request.pullRequestNumber,
-    commitSha: request.commitSha,
-  });
-  if (!createResult.success) {
-    logger.error("Failed to create review record", {
-      error: createResult.error,
-    });
-    return err("REVIEW_DB_ERROR");
-  }
-  const reviewId = createResult.data.id;
+  const { reviewId, request, owner, repo, githubService, startTime } = context;
 
   const diffResult = await fetchAndParseDiff(
     githubService,
@@ -499,7 +475,17 @@ export async function executeReview(
     );
   }
 
-  const llmResult = await analyzeAllChunks(llmService, chunks.data);
+  return analyzePostAndSaveReview(context, chunks.data, parsedDiff);
+}
+
+async function analyzePostAndSaveReview(
+  context: ReviewStepsContext,
+  chunks: readonly ReviewChunk[],
+  parsedDiff: ParsedDiff,
+): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+  const { reviewId, request, owner, repo, githubService, startTime } = context;
+
+  const llmResult = await analyzeAllChunks(context.llmService, chunks);
   if (!llmResult.success) {
     await markReviewFailed(reviewId, "LLM analysis failed");
     return err("REVIEW_LLM_FAILED");
@@ -543,5 +529,70 @@ export async function executeReview(
     issuesFound: llmResult.data.findings.length,
     processingTimeMs,
     summary: llmResult.data.summary,
+  });
+}
+
+async function runReviewStepsWithFailureGuard(
+  context: ReviewStepsContext,
+): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+  try {
+    return await runReviewSteps(context);
+  } catch (error) {
+    logger.error("Unexpected error during review", {
+      reviewId: context.reviewId,
+      repository: context.request.repositoryFullName,
+      pullRequest: context.request.pullRequestNumber,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await markReviewFailed(context.reviewId, "Unexpected error during review");
+    return err("REVIEW_UNEXPECTED_ERROR");
+  }
+}
+
+export async function executeReview(
+  request: ReviewRequest,
+  githubService: GitHubService,
+  llmService: LLMService,
+): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+  const startTime = Date.now();
+
+  const nameResult = parseRepositoryFullNameAsResult(
+    request.repositoryFullName,
+  );
+  if (!nameResult.success) return nameResult;
+  const { owner, repo } = nameResult.data;
+
+  logger.info("Starting review", {
+    repository: request.repositoryFullName,
+    pullRequest: request.pullRequestNumber,
+    commitSha: request.commitSha,
+  });
+
+  const lookupResult = await lookupRepositoryAndCheckIdempotency(
+    request.repositoryFullName,
+    request.commitSha,
+  );
+  if (!lookupResult.success) return lookupResult;
+
+  const createResult = await createReviewRecord({
+    repositoryId: lookupResult.data.repositoryId,
+    pullRequestNumber: request.pullRequestNumber,
+    commitSha: request.commitSha,
+  });
+  if (!createResult.success) {
+    logger.error("Failed to create review record", {
+      error: createResult.error,
+    });
+    return err("REVIEW_DB_ERROR");
+  }
+
+  return runReviewStepsWithFailureGuard({
+    reviewId: createResult.data.id,
+    request,
+    owner,
+    repo,
+    githubService,
+    llmService,
+    startTime,
   });
 }
