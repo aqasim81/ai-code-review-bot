@@ -242,4 +242,39 @@ describe("review job lifecycle on real BullMQ and Valkey", () => {
     expect(record?.processedAt).not.toBeNull();
     expect(reviewCalls()).toHaveLength(2);
   });
+
+  it("keeps the final status when a run that lost its lock finishes later (#115)", async () => {
+    // Run A hangs in the review; run B is the stall re-run that replaces it.
+    let finishRunA: (value: Awaited<ReturnType<typeof executeReview>>) => void =
+      () => {};
+    vi.mocked(executeReview)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishRunA = resolve;
+        }),
+      )
+      .mockResolvedValue(ok(createReviewEngineResult()));
+    harness.startWorker({ lockDurationMs: 1_000, stalledIntervalMs: 250 });
+
+    const job = await harness.queue.add("review-pr", JOB_DATA);
+    await waitUntil(
+      async () => reviewCalls().length,
+      (calls) => calls === 1,
+    );
+    // BullMQ does not stop a run whose lock is gone; it only reports the
+    // failed renewal. The stall checker then hands the job to run B.
+    const client = await harness.queue.client;
+    await client.del(`${harness.queue.toKey(job.id ?? "")}:lock`);
+    await waitUntil(
+      () => job.getState(),
+      (state) => state === "completed",
+    );
+    expect(await jobRecords()).toMatchObject([{ status: "COMPLETED" }]);
+
+    finishRunA(err("REVIEW_LLM_FAILED"));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    expect(await jobRecords()).toMatchObject([{ status: "COMPLETED" }]);
+    expect(reviewCalls()).toHaveLength(2);
+  });
 });
