@@ -22,7 +22,6 @@ import { err, ok } from "@/types/results";
 import { installationId } from "../helpers/factories";
 
 const HEAD_SHA = "a".repeat(40);
-const BEFORE_SHA = "b".repeat(40);
 
 describe("handleInstallationCreated", () => {
   beforeEach(() => {
@@ -450,23 +449,22 @@ describe("handlePullRequestEvent", () => {
     expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
-  it("enqueues delta review job for 'synchronize' with 'before' sha", async () => {
+  it("enqueues a delta review job for 'synchronize'", async () => {
     vi.mocked(enqueueDeltaReviewJob).mockResolvedValueOnce(
       ok({ jobId: "delta-job-1" }),
     );
 
     const result = await handlePullRequestEvent(
-      createPrPayload({ action: "synchronize", before: BEFORE_SHA }),
+      createPrPayload({ action: "synchronize" }),
     );
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.jobId).toBe("delta-job-1");
     expect(enqueueDeltaReviewJob).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousCommitSha: BEFORE_SHA,
-      }),
+      expect.objectContaining({ commitSha: HEAD_SHA, githubRepoId: 555 }),
     );
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
   it("ignores non-reviewable actions (closed, edited)", async () => {

@@ -1,11 +1,7 @@
 import { type Job, Queue } from "bullmq";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
-import type {
-  DeltaReviewJobPayload,
-  ReviewJobData,
-  ReviewJobPayload,
-} from "@/lib/queue/types";
+import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
 import { REVIEW_QUEUE_NAME } from "@/lib/queue/types";
 import type { QueueError } from "@/types/errors";
 import type { Result } from "@/types/results";
@@ -105,7 +101,7 @@ export async function enqueueReviewJob(
 }
 
 export async function enqueueDeltaReviewJob(
-  payload: DeltaReviewJobPayload,
+  payload: ReviewJobPayload,
 ): Promise<Result<{ jobId: string }, QueueError>> {
   return enqueueJob({ type: "review-pr-delta", payload });
 }

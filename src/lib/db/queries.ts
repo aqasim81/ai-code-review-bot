@@ -235,6 +235,36 @@ async function createRepositoryForReview(
   }
 }
 
+/**
+ * The head commit of the most recent completed review of a pull request, the
+ * base a push review is diffed against. Null when no review completed.
+ */
+export async function findLastReviewedCommitSha(input: {
+  readonly githubInstallationId: number;
+  readonly githubRepoId: number;
+  readonly pullRequestNumber: number;
+}): Promise<Result<string | null, string>> {
+  try {
+    const review = await prisma.review.findFirst({
+      where: {
+        status: "COMPLETED",
+        pullRequestNumber: input.pullRequestNumber,
+        repository: {
+          githubRepoId: input.githubRepoId,
+          installation: { githubInstallationId: input.githubInstallationId },
+        },
+      },
+      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+      select: { commitSha: true },
+    });
+    return ok(review?.commitSha ?? null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to find the last reviewed commit: ${message}`);
+  }
+}
+
 export async function findExistingReviewByCommitSha(
   repositoryId: RepositoryId,
   commitSha: string,

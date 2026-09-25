@@ -6,7 +6,11 @@ vi.mock("@/lib/llm/client");
 vi.mock("@/lib/review/engine");
 
 import type { Job } from "bullmq";
-import { createJobRecord, updateJobRecord } from "@/lib/db/queries";
+import {
+  createJobRecord,
+  findLastReviewedCommitSha,
+  updateJobRecord,
+} from "@/lib/db/queries";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
 import { calculateBackoffDelay, processReviewJob } from "@/lib/queue/processor";
@@ -54,7 +58,6 @@ function createDeltaJob(
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: "abc123",
-        previousCommitSha: "prev-sha",
       },
     },
     updateData: vi.fn().mockResolvedValue(undefined),
@@ -71,6 +74,9 @@ function setupDefaultMocks() {
   vi.mocked(createJobRecord).mockResolvedValue(ok({ id: "db-job-1" }));
   vi.mocked(updateJobRecord).mockResolvedValue(ok(undefined));
   vi.mocked(executeReview).mockResolvedValue(ok(createReviewEngineResult()));
+  vi.mocked(findLastReviewedCommitSha).mockResolvedValue(
+    ok("last-reviewed-sha"),
+  );
 
   return { mockGithubService, mockLlmService };
 }
@@ -263,16 +269,47 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
+    expect(findLastReviewedCommitSha).toHaveBeenCalledWith({
+      githubInstallationId: 12345,
+      githubRepoId: 555,
+      pullRequestNumber: 42,
+    });
     expect(mocks.mockGithubService.compareCommits).toHaveBeenCalledWith(
       "test-owner",
       "test-repo",
-      "prev-sha",
+      "last-reviewed-sha",
       "abc123",
     );
     expect(executeReview).toHaveBeenCalledWith(
       expect.objectContaining({
         filePathFilter: ["src/changed.ts", "src/also-changed.ts"],
       }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("reviews the whole pull request when no earlier review completed", async () => {
+    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(ok(null));
+
+    await processReviewJob(createDeltaJob());
+
+    expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
+    expect(executeReview).toHaveBeenCalledWith(
+      expect.not.objectContaining({ filePathFilter: expect.anything() }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("reviews the whole pull request when the last reviewed commit cannot be looked up", async () => {
+    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(err("DB down"));
+
+    await processReviewJob(createDeltaJob());
+
+    expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
+    expect(executeReview).toHaveBeenCalledWith(
+      expect.not.objectContaining({ filePathFilter: expect.anything() }),
       expect.anything(),
       expect.anything(),
     );

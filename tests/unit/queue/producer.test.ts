@@ -25,7 +25,6 @@ const PAYLOAD = {
   pullRequestNumber: 42,
   commitSha: COMMIT_SHA,
 };
-const DELTA_PAYLOAD = { ...PAYLOAD, previousCommitSha: "b".repeat(40) };
 const FULL_JOB_ID = `review-octo/repo-42-${COMMIT_SHA}-full`;
 
 function existingJob(failed: boolean) {
@@ -51,7 +50,7 @@ describe("review job producer", () => {
 
   it("gives full and delta reviews of the same commit different job IDs", async () => {
     const full = await enqueueReviewJob(PAYLOAD);
-    const delta = await enqueueDeltaReviewJob(DELTA_PAYLOAD);
+    const delta = await enqueueDeltaReviewJob(PAYLOAD);
 
     expect(full).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
     expect(delta).toEqual({
@@ -108,7 +107,7 @@ describe("review job producer", () => {
     failedJob.remove.mockRejectedValueOnce(new Error("job is locked"));
     queueGetJob.mockResolvedValueOnce(failedJob);
 
-    const result = await enqueueDeltaReviewJob(DELTA_PAYLOAD);
+    const result = await enqueueDeltaReviewJob(PAYLOAD);
 
     expect(result).toEqual({ success: false, error: "QUEUE_ENQUEUE_FAILED" });
     expect(queueAdd).not.toHaveBeenCalled();
