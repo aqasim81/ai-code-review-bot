@@ -31,6 +31,8 @@ const PAYLOAD = {
 const FULL_JOB_ID = `review-octo/repo-42-${COMMIT_SHA}-full`;
 // GitHub gives up on a webhook delivery that has not been answered in 10 s.
 const GITHUB_DELIVERY_TIMEOUT_MS = 10_000;
+// The whole enqueue, every Valkey step together, gets 5 s of that.
+const ENQUEUE_BUDGET_MS = 5_000;
 
 function existingJob(failed: boolean) {
   return {
@@ -158,6 +160,28 @@ describe("review job producer", () => {
       });
       await vi.advanceTimersByTimeAsync(GITHUB_DELIVERY_TIMEOUT_MS);
 
+      expect(settled).toEqual({
+        success: false,
+        error: "QUEUE_ENQUEUE_FAILED",
+      });
+    });
+
+    it("gives all Valkey steps together one deadline, not one each", async () => {
+      vi.useFakeTimers();
+      queueGetJob.mockReturnValueOnce(
+        new Promise((resolve) => {
+          setTimeout(() => resolve(undefined), ENQUEUE_BUDGET_MS - 100);
+        }),
+      );
+      queueAdd.mockReturnValueOnce(new Promise(() => {}));
+
+      let settled: unknown;
+      void enqueueReviewJob(PAYLOAD).then((result) => {
+        settled = result;
+      });
+      await vi.advanceTimersByTimeAsync(ENQUEUE_BUDGET_MS + 100);
+
+      expect(queueAdd).toHaveBeenCalledOnce();
       expect(settled).toEqual({
         success: false,
         error: "QUEUE_ENQUEUE_FAILED",

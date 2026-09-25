@@ -22,6 +22,8 @@ import { enqueueReviewJob } from "@/lib/queue/producer";
 
 // GitHub gives up on a webhook delivery that has not been answered in 10 s.
 const GITHUB_DELIVERY_TIMEOUT_MS = 10_000;
+// The enqueue's whole budget is 5 s; allow a little for the event loop.
+const ENQUEUE_BUDGET_WITH_SLACK_MS = 6_000;
 
 let closedServer: Server;
 
@@ -66,7 +68,7 @@ describe("enqueueing a review while Valkey is down", () => {
         success: false,
         error: "QUEUE_ENQUEUE_FAILED",
       });
-      expect(Date.now() - startedAt).toBeLessThan(GITHUB_DELIVERY_TIMEOUT_MS);
+      expect(Date.now() - startedAt).toBeLessThan(ENQUEUE_BUDGET_WITH_SLACK_MS);
     },
     GITHUB_DELIVERY_TIMEOUT_MS + 5_000,
   );
