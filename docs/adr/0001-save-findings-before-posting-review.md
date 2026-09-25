@@ -32,7 +32,8 @@ retryable with the old order would have allowed a retry to post the same comment
     job ID; or PROCESSING or PENDING and started more than 30 minutes ago. It then records the
     new job and start time and the retrying job's pull request number, and clears old
     comments. If the claim does not match, another job owns the review → `REVIEW_ALREADY_EXISTS`.
-    *(Added for #23.)* Job IDs are deterministic per repository, PR and commit, and BullMQ runs
+    *(Added for #23.)* Job IDs are deterministic per repository, PR, commit and job type (full or
+    delta, added for #39), and BullMQ runs
     one attempt of a job at a time. A PROCESSING review under the same job ID therefore means
     the earlier attempt died or lost its BullMQ lock, so the retry can reclaim it at once; if
     the earlier attempt is still running, the claim token below stops it. The 30-minute cutoff
@@ -82,6 +83,18 @@ retryable with the old order would have allowed a retry to post the same comment
   a reopen or webhook redelivery for the same commit reclaims it. A push creates a new head
   commit, and so a new review. Re-enqueueing from the sweep was left out to avoid retrying a
   review that keeps crashing the worker in a loop.
+- BullMQ ignores `add()` while a job with the same ID is kept (the last 100 completed and 500
+  failed jobs). Before enqueueing, the producer removes a job with the same ID if it is in the
+  failed set, so a reopen or redelivery can reclaim a FAILED review. A waiting, active, delayed
+  or completed job is kept and the redelivery is skipped with a log line, so redeliveries of
+  the same event are still deduped and retries of one job keep their ID. Two re-triggers that
+  race can both see the failed job: the second `remove()` may then delete the first one's new
+  job (if not yet running) and add its own, or fail with an enqueue error (if it is running).
+  Either way one job runs. *(Added for #39.)*
+- Known gap: a review can be FAILED while its job is completed, when the sweep expired it and
+  the running attempt then stopped with `REVIEW_CLAIM_LOST`. A re-trigger of the same job type
+  is then deduped until the job leaves the completed set; a trigger of the other type (a reopen
+  after a delta review) still reclaims it.
 - Known gap: an attempt that passes its pre-post claim check, posts, and is expired before it
   completes leaves the review FAILED with its findings deleted, although the review is on the
   PR. If the review is reclaimed later, the posted-review marker check stops a repost.
