@@ -24,3 +24,9 @@ export type ReviewEngineError =
   | "REVIEW_DB_ERROR";
 
 export type QueueError = "QUEUE_ENQUEUE_FAILED";
+
+export type WebhookHandlerError =
+  | "INVALID_PAYLOAD"
+  | "INSTALLATION_SAVE_FAILED"
+  | "INSTALLATION_DELETE_FAILED"
+  | "REVIEW_ENQUEUE_FAILED";

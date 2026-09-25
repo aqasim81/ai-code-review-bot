@@ -1,22 +1,74 @@
-import type { EmitterWebhookEvent } from "@octokit/webhooks";
+import { z } from "zod";
 import {
   createInstallationWithRepositories,
   markInstallationDeleted,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
+import type { WebhookHandlerError } from "@/types/errors";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
-export async function handleInstallationCreated(
-  payload: EmitterWebhookEvent<"installation.created">["payload"],
-): Promise<Result<{ installationId: string }, string>> {
-  const { installation, sender } = payload;
-  const account = installation.account;
+const installationAccountSchema = z.union([
+  z.object({ login: z.string().min(1), type: z.string().optional() }),
+  z.object({ name: z.string().min(1), slug: z.string() }),
+]);
 
-  if (!account) {
-    return err("Installation event missing account data");
+const installationCreatedPayloadSchema = z.object({
+  installation: z.object({
+    id: z.number().int(),
+    account: installationAccountSchema,
+  }),
+  sender: z.object({ login: z.string() }),
+  repositories: z
+    .array(z.object({ id: z.number().int(), full_name: z.string().min(1) }))
+    .optional(),
+});
+
+const installationDeletedPayloadSchema = z.object({
+  installation: z.object({ id: z.number().int() }),
+});
+
+const pullRequestEventPayloadSchema = z.object({
+  action: z.string(),
+  pull_request: z.object({
+    number: z.number().int().positive(),
+    head: z.object({ sha: z.string().min(1) }),
+  }),
+  repository: z.object({ full_name: z.string().min(1) }),
+  installation: z.object({ id: z.number().int() }),
+  before: z.string().optional(),
+});
+
+function parseWebhookPayloadShape<T>(
+  schema: z.ZodType<T>,
+  payload: unknown,
+  eventName: string,
+): Result<T, "INVALID_PAYLOAD"> {
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    logger.warn("Webhook payload failed validation", {
+      eventName,
+      issues: parsed.error.issues.map(
+        (issue) => `${issue.path.join(".")}: ${issue.message}`,
+      ),
+    });
+    return err("INVALID_PAYLOAD");
   }
+  return ok(parsed.data);
+}
+
+export async function handleInstallationCreated(
+  payload: unknown,
+): Promise<Result<{ installationId: string }, WebhookHandlerError>> {
+  const parsed = parseWebhookPayloadShape(
+    installationCreatedPayloadSchema,
+    payload,
+    "installation.created",
+  );
+  if (!parsed.success) return parsed;
+  const { installation, sender } = parsed.data;
+  const account = installation.account;
 
   const accountLogin = "login" in account ? account.login : account.name;
   const accountType =
@@ -31,7 +83,7 @@ export async function handleInstallationCreated(
     sender: sender.login,
   });
 
-  const repositories = payload.repositories ?? [];
+  const repositories = parsed.data.repositories ?? [];
   const result = await createInstallationWithRepositories(
     {
       githubInstallationId: installation.id,
@@ -49,7 +101,7 @@ export async function handleInstallationCreated(
       githubInstallationId: installation.id,
       error: result.error,
     });
-    return err(result.error);
+    return err("INSTALLATION_SAVE_FAILED");
   }
 
   logger.info("Installation saved successfully", {
@@ -61,17 +113,16 @@ export async function handleInstallationCreated(
   return ok({ installationId: result.data.id });
 }
 
-interface InstallationDeletedPayload {
-  installation: {
-    id: number;
-    account: { login: string; type?: string } | { name: string; slug: string };
-  };
-}
-
 export async function handleInstallationDeleted(
-  payload: InstallationDeletedPayload,
-): Promise<Result<{ acknowledged: boolean }, string>> {
-  const { installation } = payload;
+  payload: unknown,
+): Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>> {
+  const parsed = parseWebhookPayloadShape(
+    installationDeletedPayloadSchema,
+    payload,
+    "installation.deleted",
+  );
+  if (!parsed.success) return parsed;
+  const { installation } = parsed.data;
 
   logger.info("Processing installation.deleted event", {
     githubInstallationId: installation.id,
@@ -84,7 +135,7 @@ export async function handleInstallationDeleted(
       githubInstallationId: installation.id,
       error: result.error,
     });
-    return err(result.error);
+    return err("INSTALLATION_DELETE_FAILED");
   }
 
   logger.info("Installation marked as deleted", {
@@ -96,32 +147,23 @@ export async function handleInstallationDeleted(
 
 const REVIEWABLE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
-interface PullRequestEventPayload {
-  action: string;
-  pull_request: {
-    number: number;
-    head: { sha: string };
-  };
-  repository: {
-    full_name: string;
-  };
-  installation?: {
-    id: number;
-  };
-  before?: string;
-}
-
 export async function handlePullRequestEvent(
-  payload: PullRequestEventPayload,
-): Promise<Result<{ acknowledged: boolean; jobId?: string }, string>> {
+  rawPayload: unknown,
+): Promise<
+  Result<{ acknowledged: boolean; jobId?: string }, WebhookHandlerError>
+> {
+  const parsed = parseWebhookPayloadShape(
+    pullRequestEventPayloadSchema,
+    rawPayload,
+    "pull_request",
+  );
+  if (!parsed.success) return parsed;
+  const payload = parsed.data;
+
   if (!REVIEWABLE_ACTIONS.has(payload.action)) {
     return ok({ acknowledged: true });
   }
-
-  const installationId = payload.installation?.id;
-  if (installationId === undefined) {
-    return err("Missing installation ID in webhook payload");
-  }
+  const installationId = payload.installation.id;
 
   logger.info("Processing pull_request event", {
     action: payload.action,
@@ -145,7 +187,7 @@ export async function handlePullRequestEvent(
         error: result.error,
         repository: payload.repository.full_name,
       });
-      return err(`Failed to enqueue delta review: ${result.error}`);
+      return err("REVIEW_ENQUEUE_FAILED");
     }
 
     return ok({ acknowledged: true, jobId: result.data.jobId });
@@ -163,7 +205,7 @@ export async function handlePullRequestEvent(
       error: result.error,
       repository: payload.repository.full_name,
     });
-    return err(`Failed to enqueue review: ${result.error}`);
+    return err("REVIEW_ENQUEUE_FAILED");
   }
 
   return ok({ acknowledged: true, jobId: result.data.jobId });

@@ -7,18 +7,38 @@ import {
   handlePullRequestEvent,
 } from "@/lib/github/webhook-handler";
 import { logger } from "@/lib/logger";
+import type { WebhookHandlerError } from "@/types/errors";
 
 const webhooks = new Webhooks({ secret: env.GITHUB_WEBHOOK_SECRET });
 
-function parseWebhookPayload(
-  rawBody: string,
-): ReturnType<typeof JSON.parse> | null {
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseWebhookPayload(rawBody: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(rawBody);
-    return typeof parsed === "object" && parsed !== null ? parsed : null;
+    const parsed: unknown = JSON.parse(rawBody);
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function handlerFailureResponse(
+  error: WebhookHandlerError,
+  context: { deliveryId: string; eventName: string },
+): NextResponse {
+  if (error === "INVALID_PAYLOAD") {
+    return NextResponse.json(
+      { error: "Invalid webhook payload" },
+      { status: 400 },
+    );
+  }
+  logger.error("Webhook handler failed", { error, ...context });
+  return NextResponse.json(
+    { error: "Internal processing error" },
+    { status: 500 },
+  );
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -74,14 +94,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (eventName === "installation" && payload.action === "created") {
       const result = await handleInstallationCreated(payload);
       if (!result.success) {
-        logger.error("Installation handler failed", {
-          error: result.error,
-          deliveryId,
-        });
-        return NextResponse.json(
-          { error: "Internal processing error" },
-          { status: 500 },
-        );
+        return handlerFailureResponse(result.error, { deliveryId, eventName });
       }
       return NextResponse.json({
         received: true,
@@ -92,14 +105,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (eventName === "installation" && payload.action === "deleted") {
       const result = await handleInstallationDeleted(payload);
       if (!result.success) {
-        logger.error("Installation deletion handler failed", {
-          error: result.error,
-          deliveryId,
-        });
-        return NextResponse.json(
-          { error: "Internal processing error" },
-          { status: 500 },
-        );
+        return handlerFailureResponse(result.error, { deliveryId, eventName });
       }
       return NextResponse.json({
         received: true,
@@ -110,14 +116,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (eventName === "pull_request") {
       const result = await handlePullRequestEvent(payload);
       if (!result.success) {
-        logger.error("Pull request handler failed", {
-          error: result.error,
-          deliveryId,
-        });
-        return NextResponse.json(
-          { error: "Internal processing error" },
-          { status: 500 },
-        );
+        return handlerFailureResponse(result.error, { deliveryId, eventName });
       }
       return NextResponse.json({
         received: true,
