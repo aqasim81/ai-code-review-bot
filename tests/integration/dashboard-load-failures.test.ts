@@ -178,13 +178,87 @@ describe("dashboard pages when a database query fails", () => {
     },
   );
 
-  it("still shows the install prompt when the user has no installations", async () => {
-    vi.mocked(findInstallationsByGitHubIds).mockResolvedValue(ok([]));
+  it.each([
+    ["dashboard", renderDashboard],
+    ["reviews", renderReviews],
+  ] as const)(
+    "the %s page still shows the install prompt when the user has no installations",
+    async (_page, render) => {
+      vi.mocked(findInstallationsByGitHubIds).mockResolvedValue(ok([]));
 
-    const html = await renderDashboard();
+      const html = await render();
 
-    expect(html).toContain("No installations found");
-    expect(logger.error).not.toHaveBeenCalled();
+      expect(html).toContain("No installations found");
+      expect(html).not.toContain("Could not load");
+      expect(logger.error).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// Ids are UUIDs. A malformed one from the URL (NUL, which Postgres rejects in
+// text, or any other non-UUID) can never match, so it must not reach a query
+// and be reported as a load failure that a retry could fix.
+const MALFORMED_IDS = ["\u0000", "abc\u0000def", "not-a-uuid"];
+
+describe("dashboard pages with malformed ids in the URL", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGetSession.mockResolvedValue(SESSION);
+    allQueriesSucceedWithNoRows();
+  });
+
+  it.each(MALFORMED_IDS)(
+    "the repository settings page answers 404 for id %j without querying",
+    async (id) => {
+      await expect(
+        renderPage(RepoSettingsPage({ params: Promise.resolve({ id }) })),
+      ).rejects.toThrow("NEXT_NOT_FOUND");
+      expect(findAccessibleRepositoryById).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(MALFORMED_IDS)(
+    "the review detail page answers 404 for id %j without querying",
+    async (id) => {
+      await expect(
+        renderPage(ReviewDetailPage({ params: Promise.resolve({ id }) })),
+      ).rejects.toThrow("NEXT_NOT_FOUND");
+      expect(getReviewWithCommentsInScope).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    MALFORMED_IDS.flatMap((value) => [
+      ["repo", value],
+      ["cursor", value],
+    ]),
+  )(
+    "the reviews page ignores a malformed %s filter %j",
+    async (param, value) => {
+      const html = await renderPage(
+        ReviewsPage({ searchParams: Promise.resolve({ [param]: value }) }),
+      );
+
+      expect(html).not.toContain("Could not load");
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(listReviewsInScope).toHaveBeenCalledWith(
+        expect.objectContaining({ repositoryId: undefined, cursor: undefined }),
+      );
+    },
+  );
+
+  it("the reviews page passes valid repo and cursor ids to the query", async () => {
+    await renderPage(
+      ReviewsPage({
+        searchParams: Promise.resolve({ repo: REPO_ID, cursor: REPO_ID }),
+      }),
+    );
+
+    expect(listReviewsInScope).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryId: REPO_ID, cursor: REPO_ID }),
+    );
   });
 });
 
