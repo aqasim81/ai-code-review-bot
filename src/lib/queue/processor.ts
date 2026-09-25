@@ -5,13 +5,19 @@ import {
   failUnfinishedJobRecord,
   findLastReviewedCommitSha,
   type JobRecordRun,
+  renewJobRecord,
   updateJobRecord,
 } from "@/lib/db/queries";
 import { describeError } from "@/lib/errors";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
+import { startHeartbeat } from "@/lib/heartbeat";
 import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
 import { reviewJobLogContext } from "@/lib/queue/producer";
+import {
+  JOB_RECORD_MAX_RENEWAL_MS,
+  JOB_RECORD_RENEWAL_INTERVAL_MS,
+} from "@/lib/queue/stale-job-records";
 import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { exponentialDelayMs } from "@/lib/retry";
@@ -162,6 +168,35 @@ async function claimJobRecordForRun(
   return run;
 }
 
+/**
+ * Renews the job record while this run works, so the sweep only fails records
+ * whose run stopped (a dead worker, or a final status write that failed). A
+ * run past the renewal limit is taken as hung and stops renewing.
+ */
+function keepJobRecordAlive(run: JobRecordRun | null): () => void {
+  if (run === null) return () => {};
+  const startTime = Date.now();
+  return startHeartbeat(
+    "job-record",
+    async () => {
+      if (Date.now() - startTime > JOB_RECORD_MAX_RENEWAL_MS) {
+        logger.warn("Job is running past the renewal limit, not renewing", {
+          dbJobId: run.id,
+        });
+        return;
+      }
+      const renewResult = await renewJobRecord(run);
+      if (!renewResult.success) {
+        logger.warn("Failed to renew job record", {
+          dbJobId: run.id,
+          error: renewResult.error,
+        });
+      }
+    },
+    JOB_RECORD_RENEWAL_INTERVAL_MS,
+  );
+}
+
 async function writeJobRecordStatus(
   run: JobRecordRun | null,
   status: "COMPLETED" | "FAILED",
@@ -283,7 +318,6 @@ async function buildReviewRequest(
 }
 
 export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
-  const { payload } = job.data;
   const jobId = job.id;
   if (jobId === undefined) {
     throw new Error("Review job has no ID; cannot claim a review for it");
@@ -295,6 +329,20 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
   });
 
   const jobRecord = await claimJobRecordForRun(job);
+  const stopRenewingJobRecord = keepJobRecordAlive(jobRecord);
+  try {
+    await runReviewForJob(job, jobId, jobRecord);
+  } finally {
+    stopRenewingJobRecord();
+  }
+}
+
+async function runReviewForJob(
+  job: Job<ReviewJobData>,
+  jobId: string,
+  jobRecord: JobRecordRun | null,
+): Promise<void> {
+  const { payload } = job.data;
 
   // Jobs queued before the repository ID was added to the payload cannot be
   // matched to a repository safely; the next push or reopen queues a new one.

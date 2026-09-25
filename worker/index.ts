@@ -3,26 +3,29 @@ import { env } from "@/lib/env";
 import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
+import { expireAbandonedJobRecords } from "@/lib/queue/stale-job-records";
 import { DEAD_LETTER_QUEUE_NAME, REVIEW_QUEUE_NAME } from "@/lib/queue/types";
 import { expireStaleReviews } from "@/lib/review/stale-reviews";
 import { createReviewWorker, REVIEW_WORKER_CONCURRENCY } from "./review-worker";
 
 const STALE_INTERVAL_MS = 30_000;
 const LOCK_DURATION_MS = 5 * 60 * 1000;
-const STALE_REVIEW_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const STALE_RECORD_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Periodically expires reviews stuck unfinished past the stale cutoff. Safe to
- * run in every worker: each expiry is a guarded, per-review update.
+ * Periodically expires reviews and job records left unfinished by a run that
+ * stopped renewing them. Safe to run in every worker: each expiry is a
+ * guarded, per-record update.
  */
-function startStaleReviewSweep(): NodeJS.Timeout {
+function startStaleRecordSweep(): NodeJS.Timeout {
   let sweepInProgress = false;
   const sweep = (): void => {
     if (sweepInProgress) return;
     sweepInProgress = true;
     expireStaleReviews()
+      .then(() => expireAbandonedJobRecords())
       .catch((error: unknown) => {
-        logger.error("Stale review sweep crashed", {
+        logger.error("Stale record sweep crashed", {
           error: describeError(error),
         });
       })
@@ -31,7 +34,7 @@ function startStaleReviewSweep(): NodeJS.Timeout {
       });
   };
   sweep();
-  return setInterval(sweep, STALE_REVIEW_SWEEP_INTERVAL_MS);
+  return setInterval(sweep, STALE_RECORD_SWEEP_INTERVAL_MS);
 }
 
 async function main(): Promise<void> {
@@ -52,11 +55,11 @@ async function main(): Promise<void> {
     lockDurationMs: LOCK_DURATION_MS,
     stalledIntervalMs: STALE_INTERVAL_MS,
   });
-  const staleReviewSweep = startStaleReviewSweep();
+  const staleRecordSweep = startStaleRecordSweep();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("Received shutdown signal, closing worker", { signal });
-    clearInterval(staleReviewSweep);
+    clearInterval(staleRecordSweep);
     try {
       await worker.close();
       await deadLetterQueue.close();

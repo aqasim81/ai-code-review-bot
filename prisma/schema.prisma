@@ -129,6 +129,8 @@ model Job {
   lastError   String?
   /// Set by each run that claims the record; status writes need the current token.
   runToken    String?
+  /// Set on claim and renewed while the run works; the sweep fails records not renewed in time.
+  runRenewedAt DateTime?
   createdAt   DateTime  @default(now())
   processedAt DateTime?
 

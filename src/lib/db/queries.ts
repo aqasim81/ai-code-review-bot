@@ -628,6 +628,7 @@ export async function createJobRecord(
         payload: input.payload,
         status: input.initialStatus ?? "QUEUED",
         runToken,
+        runRenewedAt: new Date(),
       },
     });
     return ok({ id: job.id, runToken });
@@ -646,7 +647,12 @@ export async function claimJobRecord(
   return runQuery("Failed to claim job record", async () => {
     const { count } = await prisma.job.updateMany({
       where: { id },
-      data: { status: "PROCESSING", runToken, processedAt: null },
+      data: {
+        status: "PROCESSING",
+        runToken,
+        runRenewedAt: new Date(),
+        processedAt: null,
+      },
     });
     return ok(count > 0 ? { id, runToken } : null);
   });
@@ -678,6 +684,82 @@ export async function updateJobRecord(
   });
 }
 
+const UNFINISHED_JOB_STATUSES: JobStatus[] = ["QUEUED", "PROCESSING"];
+
+/**
+ * Records that `run` is still working on the job, so the sweep does not take
+ * the record for an abandoned one. Returns false (and writes nothing) when
+ * the run no longer owns the record or it already has a final status.
+ */
+export async function renewJobRecord(
+  run: JobRecordRun,
+): Promise<Result<boolean, string>> {
+  return runQuery("Failed to renew job record", async () => {
+    const { count } = await prisma.job.updateMany({
+      where: {
+        id: run.id,
+        runToken: run.runToken,
+        status: { in: UNFINISHED_JOB_STATUSES },
+      },
+      data: { runRenewedAt: new Date() },
+    });
+    return ok(count > 0);
+  });
+}
+
+/**
+ * An unfinished job record whose run last renewed it before `renewedBefore`.
+ * Records from before renewals were recorded fall back to `createdAt`.
+ */
+function abandonedJobRecordFilter(renewedBefore: Date) {
+  return {
+    status: { in: UNFINISHED_JOB_STATUSES },
+    OR: [
+      { runRenewedAt: { lt: renewedBefore } },
+      { runRenewedAt: null, createdAt: { lt: renewedBefore } },
+    ],
+  };
+}
+
+const ABANDONED_JOB_RECORD_BATCH_SIZE = 100;
+
+export async function findAbandonedJobRecordIds(
+  renewedBefore: Date,
+): Promise<Result<string[], string>> {
+  return runQuery("Failed to find abandoned job records", async () => {
+    const jobs = await prisma.job.findMany({
+      where: abandonedJobRecordFilter(renewedBefore),
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+      take: ABANDONED_JOB_RECORD_BATCH_SIZE,
+    });
+    return ok(jobs.map((job) => job.id));
+  });
+}
+
+/**
+ * Marks an abandoned job record FAILED and clears its run token, so a run
+ * that is somehow still going can no longer write. Returns false when the
+ * record stopped being abandoned (it was renewed, claimed or finished).
+ */
+export async function failAbandonedJobRecord(
+  id: string,
+  renewedBefore: Date,
+): Promise<Result<boolean, string>> {
+  return runQuery("Failed to expire abandoned job record", async () => {
+    const { count } = await prisma.job.updateMany({
+      where: { id, ...abandonedJobRecordFilter(renewedBefore) },
+      data: {
+        status: "FAILED",
+        lastError: "JOB_RECORD_ABANDONED",
+        runToken: null,
+        processedAt: new Date(),
+      },
+    });
+    return ok(count > 0);
+  });
+}
+
 /**
  * Marks a job record FAILED unless it already has a final status, and clears
  * its run token so a run that is somehow still going can no longer write.
@@ -691,7 +773,7 @@ export async function failUnfinishedJobRecord(
     "Failed to mark unfinished job record as failed",
     async () => {
       const { count } = await prisma.job.updateMany({
-        where: { id, status: { in: ["QUEUED", "PROCESSING"] } },
+        where: { id, status: { in: UNFINISHED_JOB_STATUSES } },
         data: {
           status: "FAILED",
           lastError: details.lastError,
