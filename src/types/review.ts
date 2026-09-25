@@ -117,6 +117,8 @@ export interface ReviewFinding {
 
 export interface ReviewResult {
   readonly findings: readonly ReviewFinding[];
+  /** The reply was cut off at the output limit; later findings may be missing. */
+  readonly truncated: boolean;
   readonly tokenUsage: {
     readonly inputTokens: number;
     readonly outputTokens: number;

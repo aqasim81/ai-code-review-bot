@@ -88,6 +88,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
 
       return ok({
         findings: parseResult.data,
+        truncated,
         tokenUsage: { inputTokens, outputTokens },
       });
     },
