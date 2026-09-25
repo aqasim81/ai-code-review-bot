@@ -95,15 +95,15 @@ pnpm test             # Vitest
 4. Check state: `git status`, recent commits
 5. Implement in small chunks, commit after each working piece
 
-## Invariants (draft, 25 Sept 2026 — confirm or edit)
+## Invariants
 
 1. `src/lib/` has zero Next.js imports (pure TypeScript business logic).
 2. Webhook signatures are validated before any job is enqueued.
-3. All database access goes through `src/lib/db/queries.ts`; multi-table writes use transactions.
-4. Business logic returns the Result type and never throws; external calls are wrapped at the boundary.
+3. All database access goes through `src/lib/db/queries.ts`.
+4. Business logic returns the Result type and never throws, except env validation at startup (`src/lib/env.ts`) and the queue processor, which throws so BullMQ retries; external calls are wrapped at the boundary.
 5. Configuration only through `src/lib/env.ts`; never raw `process.env` in `src/`.
-6. No AI or LLM provider names in code, comments, commits, docs, prompts or user-facing strings (model ID strings excepted).
-7. No dead code: every export imported, every function called.
+6. No AI or LLM provider names in code, comments, prompts or user-facing strings, except model IDs, the SDK dependency and its API-key env var.
+7. No unused imports or variables (Biome, enforced in CI).
 
 ## Workflow
 Workflow rules: `.claude/rules/ai-native-workflow.md` (local). Review policy: `REVIEW.md`.
