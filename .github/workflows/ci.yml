@@ -33,5 +33,8 @@ jobs:
       - name: Type check
         run: pnpm type-check
 
+      - name: Unused code
+        run: pnpm knip
+
       - name: Test
         run: pnpm test

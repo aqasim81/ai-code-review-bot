@@ -1,7 +1,7 @@
 import type { GitHubError } from "@/types/errors";
 import type { Result } from "@/types/results";
 
-export interface GitHubReviewComment {
+interface GitHubReviewComment {
   readonly path: string;
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
@@ -29,7 +29,7 @@ export type CommitComparisonFileStatus =
   | "changed"
   | "unchanged";
 
-export interface CommitComparisonFile {
+interface CommitComparisonFile {
   readonly filename: string;
   readonly status: CommitComparisonFileStatus;
 }

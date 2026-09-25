@@ -21,7 +21,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 - NEVER write code that isn't immediately used in the same PR
 - NEVER leave unused imports, helper functions "for later", or TODO placeholders
 - If you remove/refactor, delete ALL orphaned code: functions, types, constants, files
-- Before finishing: verify every export is imported, every function is called, every type is referenced
+- Before finishing: verify every export is imported, every function is called, every type is referenced. `pnpm knip` (in `validate` and CI) checks exports, files and dependencies; add an ignore to `knip.ts` only with a comment saying why
 
 ### TypeScript & Style
 - `strict: true`, zero `any` — use `unknown` + type guards
@@ -80,7 +80,8 @@ Webhook → Route Handler → Validate Signature → Enqueue Job (BullMQ)
 ## Key Commands
 
 ```bash
-pnpm validate         # All checks: lint + type-check + test with coverage
+pnpm validate         # All checks: lint + type-check + knip + test with coverage
+pnpm knip             # Unused files, exports and dependencies (config: knip.ts)
 pnpm dev              # Dev server
 pnpm biome check --write  # Lint + format fix
 pnpm type-check       # tsc --noEmit
