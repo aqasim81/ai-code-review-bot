@@ -483,9 +483,17 @@ async function analyzePostAndSaveReview(
   chunks: readonly ReviewChunk[],
   parsedDiff: ParsedDiff,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
-  const { reviewId, request, owner, repo, githubService, startTime } = context;
+  const {
+    reviewId,
+    request,
+    owner,
+    repo,
+    githubService,
+    llmService,
+    startTime,
+  } = context;
 
-  const llmResult = await analyzeAllChunks(context.llmService, chunks);
+  const llmResult = await analyzeAllChunks(llmService, chunks);
   if (!llmResult.success) {
     await markReviewFailed(reviewId, "LLM analysis failed");
     return err("REVIEW_LLM_FAILED");
