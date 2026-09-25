@@ -114,6 +114,22 @@ export function reviewJobLogContext(
   };
 }
 
+type AddJobOutcome =
+  | { readonly kind: "already-queued" }
+  | { readonly kind: "added"; readonly jobId: string };
+
+async function addJobUnlessLive(
+  queue: Queue,
+  jobData: ReviewJobData,
+  jobId: string,
+): Promise<AddJobOutcome> {
+  if (await findLiveJobWithSameId(queue, jobId)) {
+    return { kind: "already-queued" };
+  }
+  const job = await queue.add(jobData.type, jobData, { jobId });
+  return { kind: "added", jobId: job.id ?? jobId };
+}
+
 async function enqueueJob(
   jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
@@ -124,22 +140,19 @@ async function enqueueJob(
   };
 
   try {
-    const queue = getReviewQueue();
-    const existingJob = await withEnqueueTimeout(
-      findLiveJobWithSameId(queue, jobId),
+    // One deadline covers every Valkey step, so their waits cannot add up
+    // past GitHub's delivery timeout.
+    const outcome = await withEnqueueTimeout(
+      addJobUnlessLive(getReviewQueue(), jobData, jobId),
       ENQUEUE_TIMEOUT_MS,
     );
-    if (existingJob) {
+    if (outcome.kind === "already-queued") {
       logger.info("Review job already queued or done, skipping", logContext);
       return ok({ jobId });
     }
 
-    const job = await withEnqueueTimeout(
-      queue.add(jobData.type, jobData, { jobId }),
-      ENQUEUE_TIMEOUT_MS,
-    );
     logger.info("Review job enqueued", logContext);
-    return ok({ jobId: job.id ?? jobId });
+    return ok({ jobId: outcome.jobId });
   } catch (error) {
     logger.error("Failed to enqueue review job", {
       ...logContext,
