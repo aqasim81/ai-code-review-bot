@@ -1,5 +1,6 @@
 import "next-auth";
 import "next-auth/jwt";
+import type { UserAccess } from "@/types/access";
 
 declare module "next-auth" {
   interface Session {
@@ -12,7 +13,7 @@ declare module "next-auth" {
       login: string;
       avatarUrl: string;
     };
-    installationIds: number[];
+    access: UserAccess;
   }
 }
 
@@ -22,6 +23,6 @@ declare module "next-auth/jwt" {
     login?: string;
     avatarUrl?: string;
     accessToken?: string;
-    installationIds?: number[];
+    access?: UserAccess;
   }
 }

@@ -5,18 +5,20 @@ import { RepositoryList } from "@/components/dashboard/repository-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   findInstallationsByGitHubIds,
-  listRepositoriesForInstallation,
+  listRepositoriesInScope,
 } from "@/lib/db/queries";
+import { canManageRepository } from "@/lib/github/repository-access";
 
 export default async function RepositoriesPage() {
   const session = await auth();
-  if (!session?.installationIds) {
+  if (!session) {
     redirect("/");
   }
 
-  const installationsResult = await findInstallationsByGitHubIds(
-    session.installationIds,
-  );
+  const [installationsResult, reposResult] = await Promise.all([
+    findInstallationsByGitHubIds(session.access.githubInstallationIds),
+    listRepositoriesInScope(session.access),
+  ]);
 
   if (!installationsResult.success) {
     return (
@@ -27,15 +29,16 @@ export default async function RepositoriesPage() {
     );
   }
 
-  const installationsWithRepos = await Promise.all(
-    installationsResult.data.map(async (installation) => {
-      const reposResult = await listRepositoriesForInstallation(
-        installation.id,
-      );
-      return {
-        installation,
-        repositories: reposResult.success ? reposResult.data : [],
-      };
+  const repositories = reposResult.success ? reposResult.data : [];
+  const installationsWithRepos = installationsResult.data.map(
+    (installation) => ({
+      installation,
+      repositories: repositories
+        .filter((repo) => repo.installationId === installation.id)
+        .map((repo) => ({
+          ...repo,
+          canManage: canManageRepository(session.access, repo.githubRepoId),
+        })),
     }),
   );
 

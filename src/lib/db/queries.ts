@@ -10,6 +10,7 @@ import type {
   JobStatus,
   ReviewStatus,
 } from "@/generated/prisma/enums";
+import type { AccessScope } from "@/types/access";
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
@@ -477,6 +478,7 @@ export async function findInstallationsByGitHubIds(
         githubAccountType: true,
         status: true,
       },
+      orderBy: [{ githubAccountLogin: "asc" }, { githubInstallationId: "asc" }],
     });
     return ok(
       installations.map((i) => ({
@@ -491,33 +493,55 @@ export async function findInstallationsByGitHubIds(
   }
 }
 
-interface RepositoryListItem {
-  readonly id: RepositoryId;
-  readonly fullName: string;
-  readonly isEnabled: boolean;
-  readonly settings: unknown;
-  readonly createdAt: Date;
+// Repositories the user may see: ones GitHub reported as accessible, under an
+// active installation GitHub reported for the user. Empty lists match nothing.
+function repositoryInScopeWhere(
+  scope: AccessScope,
+  githubRepoIds: readonly number[] = scope.accessibleGithubRepoIds,
+): Prisma.RepositoryWhereInput {
+  return {
+    githubRepoId: { in: [...githubRepoIds] },
+    installation: {
+      githubInstallationId: { in: [...scope.githubInstallationIds] },
+      status: "ACTIVE",
+    },
+  };
 }
 
-export async function listRepositoriesForInstallation(
-  installationId: InstallationId,
+function repositoryManageableWhere(
+  scope: AccessScope,
+): Prisma.RepositoryWhereInput {
+  return repositoryInScopeWhere(scope, scope.manageableGithubRepoIds);
+}
+
+interface RepositoryListItem {
+  readonly id: RepositoryId;
+  readonly githubRepoId: number;
+  readonly installationId: InstallationId;
+  readonly fullName: string;
+  readonly isEnabled: boolean;
+}
+
+export async function listRepositoriesInScope(
+  scope: AccessScope,
 ): Promise<Result<readonly RepositoryListItem[], string>> {
   try {
     const repositories = await prisma.repository.findMany({
-      where: { installationId },
+      where: repositoryInScopeWhere(scope),
       select: {
         id: true,
+        githubRepoId: true,
+        installationId: true,
         fullName: true,
         isEnabled: true,
-        settings: true,
-        createdAt: true,
       },
-      orderBy: { fullName: "asc" },
+      orderBy: [{ fullName: "asc" }, { id: "asc" }],
     });
     return ok(
       repositories.map((r) => ({
         ...r,
         id: r.id as RepositoryId,
+        installationId: r.installationId as InstallationId,
       })),
     );
   } catch (error) {
@@ -529,36 +553,27 @@ export async function listRepositoriesForInstallation(
 
 interface RepositoryDetail {
   readonly id: RepositoryId;
+  readonly githubRepoId: number;
   readonly fullName: string;
-  readonly isEnabled: boolean;
   readonly settings: unknown;
-  readonly installationId: InstallationId;
 }
 
-export async function findRepositoryByIdForInstallations(
+export async function findAccessibleRepositoryById(
   repositoryId: RepositoryId,
-  installationIds: readonly InstallationId[],
+  scope: AccessScope,
 ): Promise<Result<RepositoryDetail | null, string>> {
   try {
     const repo = await prisma.repository.findFirst({
-      where: {
-        id: repositoryId,
-        installationId: { in: [...installationIds] },
-      },
+      where: { id: repositoryId, ...repositoryInScopeWhere(scope) },
       select: {
         id: true,
+        githubRepoId: true,
         fullName: true,
-        isEnabled: true,
         settings: true,
-        installationId: true,
       },
     });
     if (!repo) return ok(null);
-    return ok({
-      ...repo,
-      id: repo.id as RepositoryId,
-      installationId: repo.installationId as InstallationId,
-    });
+    return ok({ ...repo, id: repo.id as RepositoryId });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -566,16 +581,22 @@ export async function findRepositoryByIdForInstallations(
   }
 }
 
+/**
+ * Updates the repository only when the user can manage it. Returns false when
+ * no repository matched, so the caller can refuse without a separate check
+ * racing the write.
+ */
 export async function updateRepositoryEnabled(
   repositoryId: RepositoryId,
   isEnabled: boolean,
-): Promise<Result<void, string>> {
+  scope: AccessScope,
+): Promise<Result<boolean, string>> {
   try {
-    await prisma.repository.update({
-      where: { id: repositoryId },
+    const { count } = await prisma.repository.updateMany({
+      where: { id: repositoryId, ...repositoryManageableWhere(scope) },
       data: { isEnabled },
     });
-    return ok(undefined);
+    return ok(count > 0);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -586,13 +607,14 @@ export async function updateRepositoryEnabled(
 export async function updateRepositorySettings(
   repositoryId: RepositoryId,
   settings: RepositorySettingsInput,
-): Promise<Result<void, string>> {
+  scope: AccessScope,
+): Promise<Result<boolean, string>> {
   try {
-    await prisma.repository.update({
-      where: { id: repositoryId },
+    const { count } = await prisma.repository.updateMany({
+      where: { id: repositoryId, ...repositoryManageableWhere(scope) },
       data: { settings: JSON.parse(JSON.stringify(settings)) },
     });
-    return ok(undefined);
+    return ok(count > 0);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -601,7 +623,7 @@ export async function updateRepositorySettings(
 }
 
 interface ListReviewsInput {
-  readonly installationId: InstallationId;
+  readonly scope: AccessScope;
   readonly repositoryId?: RepositoryId;
   readonly status?: ReviewStatus;
   readonly cursor?: string;
@@ -620,7 +642,7 @@ interface ReviewListItem {
   readonly completedAt: Date | null;
 }
 
-export async function listReviewsForInstallation(
+export async function listReviewsInScope(
   input: ListReviewsInput,
 ): Promise<
   Result<
@@ -629,12 +651,23 @@ export async function listReviewsForInstallation(
   >
 > {
   const limit = input.limit ?? 20;
+  const repository = repositoryInScopeWhere(input.scope);
 
   try {
+    // Prisma locates the cursor row without the where filter, so a cursor
+    // outside the scope would reveal where that review sits in time.
+    if (input.cursor) {
+      const cursorReview = await prisma.review.findFirst({
+        where: { id: input.cursor, repository },
+        select: { id: true },
+      });
+      if (!cursorReview) return ok({ reviews: [], nextCursor: null });
+    }
+
     const reviews = await prisma.review.findMany({
       where: {
         repository: {
-          installationId: input.installationId,
+          ...repository,
           ...(input.repositoryId ? { id: input.repositoryId } : {}),
         },
         ...(input.status ? { status: input.status } : {}),
@@ -650,7 +683,7 @@ export async function listReviewsForInstallation(
         completedAt: true,
         repository: { select: { fullName: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
     });
@@ -704,15 +737,15 @@ interface ReviewDetailResult {
   }>;
 }
 
-export async function getReviewWithCommentsForInstallations(
+export async function getReviewWithCommentsInScope(
   reviewId: ReviewId,
-  installationIds: readonly InstallationId[],
+  scope: AccessScope,
 ): Promise<Result<ReviewDetailResult | null, string>> {
   try {
     const review = await prisma.review.findFirst({
       where: {
         id: reviewId,
-        repository: { installationId: { in: [...installationIds] } },
+        repository: repositoryInScopeWhere(scope),
       },
       select: {
         id: true,
@@ -773,32 +806,33 @@ interface ReviewStatsResult {
   readonly recentReviewCount: number;
 }
 
-export async function getReviewStatsForInstallation(
-  installationId: InstallationId,
+export async function getReviewStatsInScope(
+  scope: AccessScope,
 ): Promise<Result<ReviewStatsResult, string>> {
   try {
+    const repository = repositoryInScopeWhere(scope);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const [totalReviews, issueSum, recentCount, categoryGroups] =
       await prisma.$transaction([
         prisma.review.count({
-          where: { repository: { installationId } },
+          where: { repository },
         }),
         prisma.review.aggregate({
-          where: { repository: { installationId } },
+          where: { repository },
           _sum: { issuesFound: true },
         }),
         prisma.review.count({
           where: {
-            repository: { installationId },
+            repository,
             createdAt: { gte: thirtyDaysAgo },
           },
         }),
         prisma.reviewComment.groupBy({
           by: ["category"],
           orderBy: { category: "asc" },
-          where: { review: { repository: { installationId } } },
+          where: { review: { repository } },
           _count: { _all: true },
         }),
       ]);

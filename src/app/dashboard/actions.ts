@@ -1,54 +1,74 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { auth } from "@/auth";
 import {
-  findInstallationsByGitHubIds,
-  findRepositoryByIdForInstallations,
+  findAccessibleRepositoryById,
   updateRepositoryEnabled,
   updateRepositorySettings,
 } from "@/lib/db/queries";
-import type { InstallationId, RepositoryId } from "@/types/branded";
+import { canManageRepository } from "@/lib/github/repository-access";
+import type { AccessScope } from "@/types/access";
+import type { RepositoryId } from "@/types/branded";
 import { repositorySettingsSchema } from "@/types/settings";
 
-async function authorizeRepositoryAccess(
+type ActionResult = { success: true } | { success: false; error: string };
+
+// Server actions are callable with any serialisable arguments, not only the
+// ones the UI sends, so check their shape before using them in a query.
+const repositoryIdSchema = z.string().uuid();
+const isEnabledSchema = z.boolean();
+
+const UNAUTHORIZED: ActionResult = { success: false, error: "Unauthorized" };
+const FORBIDDEN: ActionResult = {
+  success: false,
+  error: "You need admin or maintain permission on this repository.",
+};
+
+/**
+ * Returns the caller's access scope when they can manage the repository. A
+ * repository outside their scope is reported as unauthorized, so the answer
+ * does not reveal that it exists.
+ */
+async function authorizeRepositoryManagement(
   repositoryId: RepositoryId,
-): Promise<InstallationId | null> {
+): Promise<{ scope: AccessScope } | ActionResult> {
   const session = await auth();
-  if (!session?.installationIds?.length) return null;
+  if (!session) return UNAUTHORIZED;
 
-  const installations = await findInstallationsByGitHubIds(
-    session.installationIds,
-  );
-  if (!installations.success) return null;
-
-  const repo = await findRepositoryByIdForInstallations(
-    repositoryId,
-    installations.data.map((i) => i.id),
-  );
-  if (!repo.success || !repo.data) return null;
-
-  return repo.data.installationId;
+  const repo = await findAccessibleRepositoryById(repositoryId, session.access);
+  if (!repo.success || !repo.data) return UNAUTHORIZED;
+  if (!canManageRepository(session.access, repo.data.githubRepoId)) {
+    return FORBIDDEN;
+  }
+  return { scope: session.access };
 }
 
 export async function toggleRepositoryEnabledAction(
   repositoryId: string,
   isEnabled: boolean,
-): Promise<{ success: boolean; error?: string }> {
-  const installationId = await authorizeRepositoryAccess(
+): Promise<ActionResult> {
+  if (
+    !repositoryIdSchema.safeParse(repositoryId).success ||
+    !isEnabledSchema.safeParse(isEnabled).success
+  ) {
+    return UNAUTHORIZED;
+  }
+  const authorization = await authorizeRepositoryManagement(
     repositoryId as RepositoryId,
   );
-  if (!installationId) {
-    return { success: false, error: "Unauthorized" };
-  }
+  if (!("scope" in authorization)) return authorization;
 
   const result = await updateRepositoryEnabled(
     repositoryId as RepositoryId,
     isEnabled,
+    authorization.scope,
   );
   if (!result.success) {
     return { success: false, error: result.error };
   }
+  if (!result.data) return FORBIDDEN;
 
   revalidatePath("/dashboard/repos");
   return { success: true };
@@ -57,13 +77,17 @@ export async function toggleRepositoryEnabledAction(
 export async function saveRepositorySettingsAction(
   repositoryId: string,
   formData: FormData,
-): Promise<{ success: boolean; error?: string }> {
-  const installationId = await authorizeRepositoryAccess(
+): Promise<ActionResult> {
+  if (
+    !repositoryIdSchema.safeParse(repositoryId).success ||
+    !(formData instanceof FormData)
+  ) {
+    return UNAUTHORIZED;
+  }
+  const authorization = await authorizeRepositoryManagement(
     repositoryId as RepositoryId,
   );
-  if (!installationId) {
-    return { success: false, error: "Unauthorized" };
-  }
+  if (!("scope" in authorization)) return authorization;
 
   const raw = {
     enabledCategories: formData.getAll("enabledCategories") as string[],
@@ -83,10 +107,12 @@ export async function saveRepositorySettingsAction(
   const result = await updateRepositorySettings(
     repositoryId as RepositoryId,
     parsed.data,
+    authorization.scope,
   );
   if (!result.success) {
     return { success: false, error: result.error };
   }
+  if (!result.data) return FORBIDDEN;
 
   revalidatePath(`/dashboard/repos/${repositoryId}`);
   revalidatePath("/dashboard/repos");

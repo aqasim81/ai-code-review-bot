@@ -7,11 +7,13 @@ import { Switch } from "@/components/ui/switch";
 interface RepositoryToggleProps {
   readonly repositoryId: string;
   readonly isEnabled: boolean;
+  readonly canManage: boolean;
 }
 
 export function RepositoryToggle({
   repositoryId,
   isEnabled,
+  canManage,
 }: RepositoryToggleProps) {
   const [isPending, startTransition] = useTransition();
 
@@ -25,7 +27,7 @@ export function RepositoryToggle({
     <Switch
       checked={isEnabled}
       onCheckedChange={handleToggle}
-      disabled={isPending}
+      disabled={isPending || !canManage}
       aria-label={isEnabled ? "Disable reviews" : "Enable reviews"}
     />
   );

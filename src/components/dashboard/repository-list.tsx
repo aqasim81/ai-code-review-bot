@@ -14,6 +14,7 @@ interface Repository {
   readonly id: string;
   readonly fullName: string;
   readonly isEnabled: boolean;
+  readonly canManage: boolean;
 }
 
 interface RepositoryListProps {
@@ -50,6 +51,7 @@ export function RepositoryList({
                 <RepositoryToggle
                   repositoryId={repo.id}
                   isEnabled={repo.isEnabled}
+                  canManage={repo.canManage}
                 />
                 <span className="font-medium">{repo.fullName}</span>
               </div>

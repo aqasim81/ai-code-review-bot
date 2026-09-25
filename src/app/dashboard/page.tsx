@@ -7,19 +7,19 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   findInstallationsByGitHubIds,
-  getReviewStatsForInstallation,
-  listRepositoriesForInstallation,
+  getReviewStatsInScope,
+  listRepositoriesInScope,
 } from "@/lib/db/queries";
 import { env } from "@/lib/env";
 
 export default async function DashboardPage() {
   const session = await auth();
-  if (!session?.installationIds) {
+  if (!session) {
     redirect("/");
   }
 
   const installationsResult = await findInstallationsByGitHubIds(
-    session.installationIds,
+    session.access.githubInstallationIds,
   );
 
   if (!installationsResult.success || installationsResult.data.length === 0) {
@@ -53,15 +53,13 @@ export default async function DashboardPage() {
     );
   }
 
-  const firstInstallation = installationsResult.data[0];
-  if (!firstInstallation) {
-    redirect("/");
-  }
-
   const [statsResult, reposResult] = await Promise.all([
-    getReviewStatsForInstallation(firstInstallation.id),
-    listRepositoriesForInstallation(firstInstallation.id),
+    getReviewStatsInScope(session.access),
+    listRepositoriesInScope(session.access),
   ]);
+  const accountLogins = installationsResult.data
+    .map((installation) => installation.githubAccountLogin)
+    .join(", ");
 
   const stats = statsResult.success ? statsResult.data : null;
   const repos = reposResult.success ? reposResult.data : [];
@@ -70,7 +68,7 @@ export default async function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        description={`Overview for ${firstInstallation.githubAccountLogin}`}
+        description={`Overview for ${accountLogins}`}
       />
 
       {stats && (
@@ -90,7 +88,7 @@ export default async function DashboardPage() {
           <CardContent>
             {repos.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No repositories found for this installation.
+                No repositories found.
               </p>
             ) : (
               <ul className="space-y-2">
