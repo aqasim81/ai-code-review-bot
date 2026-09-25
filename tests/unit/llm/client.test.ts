@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createReviewChunk,
   createReviewFinding,
+  createReviewPromptOptions,
 } from "../../helpers/factories";
 
 // Mock the SDK
@@ -108,20 +109,27 @@ describe("createLlmClient", () => {
     expect(typeof service.analyzeReviewChunk).toBe("function");
   });
 
-  it("builds the prompt with the repository's custom instructions", async () => {
+  it("builds the prompt with the repository's prompt options", async () => {
     mockSuccessfulResponse();
     const { buildReviewPrompt } = await import("@/lib/llm/prompts");
     const service = createLlmClient({ apiKey: "test-key" });
     const chunk = createReviewChunk();
+    const options = createReviewPromptOptions({
+      customInstructions: "We use tabs.",
+      enabledCategories: ["BUGS"],
+    });
 
-    await service.analyzeReviewChunk(chunk, "We use tabs.");
+    await service.analyzeReviewChunk(chunk, options);
 
-    expect(buildReviewPrompt).toHaveBeenCalledWith(chunk, "We use tabs.");
+    expect(buildReviewPrompt).toHaveBeenCalledWith(chunk, options);
   });
 
   it("returns LLM_API_KEY_MISSING when API key is empty", async () => {
     const service = createLlmClient({ apiKey: "" });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("LLM_API_KEY_MISSING");
@@ -133,7 +141,10 @@ describe("createLlmClient", () => {
       apiKey: "test-key",
       modelId: "test-model",
     });
-    await service.analyzeReviewChunk(createReviewChunk(), "");
+    await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -147,7 +158,10 @@ describe("createLlmClient", () => {
   it("sends the configured model when none is passed", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
-    await service.analyzeReviewChunk(createReviewChunk(), "");
+    await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: "configured-model" }),
@@ -157,7 +171,10 @@ describe("createLlmClient", () => {
   it("leaves room for thinking in the output limit by default", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
-    await service.analyzeReviewChunk(createReviewChunk(), "");
+    await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ max_tokens: 16_000 }),
@@ -167,7 +184,10 @@ describe("createLlmClient", () => {
   it("returns findings and token usage on success", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -185,7 +205,10 @@ describe("createLlmClient", () => {
     });
 
     const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(result).toEqual({
       success: true,
@@ -207,7 +230,10 @@ describe("createLlmClient", () => {
     });
 
     const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(result).toEqual({
       success: true,
@@ -220,7 +246,10 @@ describe("createLlmClient", () => {
   it("turns off the SDK's own retries so a chunk is retried only here", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
-    await service.analyzeReviewChunk(createReviewChunk(), "");
+    await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(sdkOptions.at(-1)).toEqual(
       expect.objectContaining({ maxRetries: 0 }),
@@ -253,7 +282,10 @@ describe("createLlmClient", () => {
     mockCreate.mockRejectedValueOnce(error);
     const service = createLlmClient({ apiKey: "test-key" });
 
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(result).toEqual({ success: false, error: expected });
     expect(mockCreate).toHaveBeenCalledTimes(1);
@@ -266,7 +298,10 @@ describe("createLlmClient", () => {
     });
 
     const service = createLlmClient({ apiKey: "test-key", maxRetries: 0 });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(result.success).toBe(false);
     if (result.success) return;
@@ -284,7 +319,10 @@ describe("createLlmClient", () => {
       });
 
     const service = createLlmClient({ apiKey: "test-key", maxRetries: 1 });
-    const resultPromise = service.analyzeReviewChunk(createReviewChunk(), "");
+    const resultPromise = service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     // Advance past retry delay (1s for first retry)
     await vi.advanceTimersByTimeAsync(1500);
@@ -307,7 +345,10 @@ describe("createLlmClient", () => {
       });
 
     const service = createLlmClient({ apiKey: "test-key", maxRetries: 1 });
-    const resultPromise = service.analyzeReviewChunk(createReviewChunk(), "");
+    const resultPromise = service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     await vi.advanceTimersByTimeAsync(1500);
 
@@ -324,7 +365,10 @@ describe("createLlmClient", () => {
     );
 
     const service = createLlmClient({ apiKey: "test-key", maxRetries: 3 });
-    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
@@ -340,7 +384,10 @@ describe("createLlmClient", () => {
       .mockRejectedValueOnce(new MockRateLimitError());
 
     const service = createLlmClient({ apiKey: "test-key", maxRetries: 1 });
-    const resultPromise = service.analyzeReviewChunk(createReviewChunk(), "");
+    const resultPromise = service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
 
     // Advance past retry delays
     await vi.advanceTimersByTimeAsync(5000);

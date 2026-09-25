@@ -1,3 +1,4 @@
+import type { CommentCategory } from "@/generated/prisma/enums";
 import type { Result } from "@/types/results";
 import type { ReviewChunk, ReviewResult } from "@/types/review";
 
@@ -11,9 +12,15 @@ export type LLMError =
   | "LLM_CONTEXT_TOO_LONG"
   | "LLM_UNKNOWN_ERROR";
 
+/** The repository's settings that shape the review prompt. */
+export interface ReviewPromptOptions {
+  readonly customInstructions: string;
+  readonly enabledCategories: readonly CommentCategory[];
+}
+
 export interface LLMService {
   analyzeReviewChunk(
     chunk: ReviewChunk,
-    customInstructions: string,
+    promptOptions: ReviewPromptOptions,
   ): Promise<Result<ReviewResult, LLMError>>;
 }

@@ -1558,7 +1558,23 @@ describe("executeReview — repository settings", () => {
 
     expect(llm.analyzeReviewChunk).toHaveBeenCalledWith(
       expect.anything(),
-      "We use tabs.",
+      expect.objectContaining({ customInstructions: "We use tabs." }),
+    );
+  });
+
+  it("passes the enabled categories to the model", async () => {
+    useRepositorySettings({ enabledCategories: ["SECURITY", "BUGS"] });
+    const llm = createMockLlmService();
+
+    await executeReview(
+      createReviewRequest(),
+      githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF),
+      llm,
+    );
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ enabledCategories: ["SECURITY", "BUGS"] }),
     );
   });
 });

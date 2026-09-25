@@ -32,7 +32,7 @@ import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
 import type { GitHubError, ReviewEngineError } from "@/types/errors";
 import type { GitHubService, PullRequestReviewPayload } from "@/types/github";
-import type { LLMError, LLMService } from "@/types/llm";
+import type { LLMError, LLMService, ReviewPromptOptions } from "@/types/llm";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type {
@@ -477,7 +477,7 @@ function shouldStopAtFailedChunk(
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
-  customInstructions: string,
+  promptOptions: ReviewPromptOptions,
   isFinalAttempt: boolean,
 ): Promise<Result<LlmAnalysisResult, StepFailure>> {
   const allFindings: ReviewFinding[] = [];
@@ -488,10 +488,7 @@ async function analyzeAllChunks(
   let totalOutputTokens = 0;
 
   for (const chunk of chunks) {
-    const result = await llmService.analyzeReviewChunk(
-      chunk,
-      customInstructions,
-    );
+    const result = await llmService.analyzeReviewChunk(chunk, promptOptions);
     if (!result.success) {
       const filePaths = chunk.files.map((file) => file.filePath);
       logger.error("LLM analysis failed for chunk", {
@@ -867,7 +864,10 @@ async function analyzeSaveAndPostReview(
   const llmResult = await analyzeAllChunks(
     llmService,
     chunks,
-    settings.customInstructions,
+    {
+      customInstructions: settings.customInstructions,
+      enabledCategories: settings.enabledCategories,
+    },
     request.isFinalAttempt,
   );
   if (!llmResult.success) return llmResult;
