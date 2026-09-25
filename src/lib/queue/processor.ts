@@ -112,12 +112,15 @@ async function claimJobRecordForRun(
   if (typeof existingId === "string") {
     const claimResult = await claimJobRecord(existingId);
     if (!claimResult.success) {
-      logger.warn("Failed to claim job record in database", {
+      logger.error("Failed to claim job record in database", {
         jobId: job.id,
         dbJobId: existingId,
         error: claimResult.error,
       });
-      return null;
+      // Reviewing without the claim would leave the record without a final
+      // status, so stop before any work is done.
+      // throw-ok: BullMQ catches it and retries the job.
+      throw new Error(`Failed to claim job record: ${claimResult.error}`);
     }
     return claimResult.data;
   }

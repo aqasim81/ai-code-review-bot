@@ -515,15 +515,16 @@ describe("processReviewJob", () => {
     expect(updateJobRecord).toHaveBeenCalledTimes(1);
   });
 
-  it("reviews without a job record when claiming the saved one fails", async () => {
+  it("stops before reviewing when claiming the saved job record fails", async () => {
     vi.mocked(claimJobRecord).mockResolvedValue(err("DB error"));
     const job = createMockJob({
       data: { ...createMockJob().data, dbJobId: "existing-db-job" },
     });
 
-    await processReviewJob(job);
-
-    expect(executeReview).toHaveBeenCalled();
+    await expect(processReviewJob(job)).rejects.toThrow(
+      "Failed to claim job record",
+    );
+    expect(executeReview).not.toHaveBeenCalled();
     expect(updateJobRecord).not.toHaveBeenCalled();
   });
 });
