@@ -1,6 +1,9 @@
 import LlmSdk from "@anthropic-ai/sdk";
 import { env } from "@/lib/env";
-import { parseLlmReviewResponse } from "@/lib/llm/parser";
+import {
+  parseLlmReviewResponse,
+  parseTruncatedLlmReviewResponse,
+} from "@/lib/llm/parser";
 import { buildReviewPrompt } from "@/lib/llm/prompts";
 import { logger } from "@/lib/logger";
 import type { LLMError, LLMService } from "@/types/llm";
@@ -59,12 +62,20 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
         return result;
       }
 
-      const { responseText, inputTokens, outputTokens } = result.data;
+      const { responseText, inputTokens, outputTokens, truncated } =
+        result.data;
 
-      const parseResult = parseLlmReviewResponse(
-        responseText,
-        confidenceThreshold,
-      );
+      // A reply cut off at the output limit is an incomplete JSON array; keep
+      // the findings completed before the cut rather than failing the review.
+      if (truncated) {
+        logger.warn("LLM output truncated at the output token limit", {
+          outputTokens,
+          maxOutputTokens,
+        });
+      }
+      const parseResult = truncated
+        ? parseTruncatedLlmReviewResponse(responseText, confidenceThreshold)
+        : parseLlmReviewResponse(responseText, confidenceThreshold);
       if (!parseResult.success) {
         return parseResult;
       }
@@ -81,6 +92,7 @@ interface LlmRawResponse {
   readonly responseText: string;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  readonly truncated: boolean;
 }
 
 async function callWithRetry(
@@ -156,6 +168,7 @@ async function executeSingleLlmCall(
       responseText: textBlock.text,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      truncated: response.stop_reason === "max_tokens",
     });
   } catch (error: unknown) {
     return err(mapSdkError(error));
