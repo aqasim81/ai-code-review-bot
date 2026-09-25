@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/auth";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/dashboard/settings-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,7 @@ export default async function RepoSettingsPage({
   params,
 }: RepoSettingsPageProps) {
   const { id } = await params;
-  const session = await auth();
+  const session = await getSession();
   if (!session) {
     redirect("/");
   }
@@ -49,12 +49,7 @@ export default async function RepoSettingsPage({
           <SettingsForm
             repositoryId={repo.id}
             canManage={canManageRepository(session.access, repo.githubRepoId)}
-            initialSettings={{
-              enabledCategories: settings.enabledCategories,
-              minimumSeverity: settings.minimumSeverity,
-              excludePatterns: settings.excludePatterns,
-              customInstructions: settings.customInstructions,
-            }}
+            initialSettings={settings}
           />
         </CardContent>
       </Card>

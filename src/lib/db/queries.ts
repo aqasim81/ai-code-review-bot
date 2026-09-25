@@ -757,7 +757,7 @@ interface ListReviewsInput {
   readonly limit?: number;
 }
 
-interface ReviewListItem {
+export interface ReviewListItem {
   readonly id: ReviewId;
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
@@ -840,7 +840,7 @@ export async function listReviewsInScope(
   });
 }
 
-interface ReviewDetailResult extends ReviewListItem {
+export interface ReviewDetailResult extends ReviewListItem {
   readonly summary: string | null;
   readonly comments: ReadonlyArray<{
     readonly id: string;

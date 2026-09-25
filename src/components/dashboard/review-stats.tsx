@@ -12,6 +12,30 @@ interface ReviewStatsProps {
   }>;
 }
 
+function StatCard({
+  title,
+  value,
+  detail,
+}: {
+  readonly title: string;
+  readonly value: string | number;
+  readonly detail?: string;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="text-2xl font-bold">{value}</div>
+        {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ReviewStats({
   totalReviews,
   totalIssuesFound,
@@ -25,56 +49,14 @@ export function ReviewStats({
 
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Total Reviews
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">{totalReviews}</div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Issues Found
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">{totalIssuesFound}</div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Last 30 Days
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">{recentReviewCount}</div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Top Category
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">
-            {topCategory ? CATEGORY_LABELS[topCategory.category] : "N/A"}
-          </div>
-          {topCategory && (
-            <p className="text-xs text-muted-foreground">
-              {topCategory.count} issues
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      <StatCard title="Total Reviews" value={totalReviews} />
+      <StatCard title="Issues Found" value={totalIssuesFound} />
+      <StatCard title="Last 30 Days" value={recentReviewCount} />
+      <StatCard
+        title="Top Category"
+        value={topCategory ? CATEGORY_LABELS[topCategory.category] : "N/A"}
+        detail={topCategory ? `${topCategory.count} issues` : undefined}
+      />
     </div>
   );
 }

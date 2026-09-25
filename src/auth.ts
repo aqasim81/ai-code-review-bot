@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import GitHub from "next-auth/providers/github";
+import { cache } from "react";
 import { env } from "@/lib/env";
 import { refreshAccessState } from "@/lib/github/access-refresh";
 import { parseUserAccess } from "@/lib/github/repository-access";
@@ -83,3 +84,9 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
     signIn: "/",
   },
 });
+
+/**
+ * The session for the current server render, read once per request so the
+ * dashboard layout and page share it. Server actions call `auth` directly.
+ */
+export const getSession = cache(() => auth());

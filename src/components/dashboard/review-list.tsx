@@ -9,16 +9,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ReviewStatus } from "@/generated/prisma/enums";
+import type { ReviewListItem } from "@/lib/db/queries";
 
-interface ReviewItem {
-  readonly id: string;
-  readonly repositoryFullName: string;
-  readonly pullRequestNumber: number;
-  readonly status: ReviewStatus;
-  readonly issuesFound: number;
-  readonly createdAt: Date;
-}
+type ReviewItem = Pick<
+  ReviewListItem,
+  | "id"
+  | "repositoryFullName"
+  | "pullRequestNumber"
+  | "status"
+  | "issuesFound"
+  | "createdAt"
+>;
 
 interface ReviewListProps {
   readonly reviews: readonly ReviewItem[];

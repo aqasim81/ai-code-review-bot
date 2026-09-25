@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/auth";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { STATUS_VARIANT } from "@/components/dashboard/review-constants";
 import { ReviewDetail } from "@/components/dashboard/review-detail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getReviewWithCommentsInScope } from "@/lib/db/queries";
-import { parseRepositoryFullName } from "@/lib/repository-utils";
 import type { ReviewId } from "@/types/branded";
 
 interface ReviewDetailPageProps {
@@ -18,7 +17,7 @@ export default async function ReviewDetailPage({
   params,
 }: ReviewDetailPageProps) {
   const { id } = await params;
-  const session = await auth();
+  const session = await getSession();
   if (!session) {
     redirect("/");
   }
@@ -34,10 +33,7 @@ export default async function ReviewDetailPage({
 
   const review = reviewResult.data;
 
-  const parsed = parseRepositoryFullName(review.repositoryFullName);
-  const prUrl = parsed
-    ? `https://github.com/${parsed.owner}/${parsed.repo}/pull/${review.pullRequestNumber}`
-    : `https://github.com/${review.repositoryFullName}/pull/${review.pullRequestNumber}`;
+  const prUrl = `https://github.com/${review.repositoryFullName}/pull/${review.pullRequestNumber}`;
 
   return (
     <div>

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth, signOut } from "@/auth";
+import { getSession, signOut } from "@/auth";
 import { NavSidebar } from "@/components/dashboard/nav-sidebar";
 import { MAX_SESSION_REPOSITORIES } from "@/lib/github/user-installations";
 
@@ -8,7 +8,7 @@ export default async function DashboardLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const session = await auth();
+  const session = await getSession();
 
   if (!session?.user) {
     redirect("/");
