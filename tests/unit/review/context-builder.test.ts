@@ -25,50 +25,41 @@ function linesOfCode(count: number) {
 
 describe("buildReviewContext", () => {
   const emptyAstMap = new Map<string, AstFileContext>();
-  const emptyContentMap = new Map<string, string>();
 
   // --- No reviewable files ---
 
-  it("returns CONTEXT_NO_REVIEWABLE_FILES when all files are binary", () => {
+  it("returns no chunks when all files are binary", () => {
     const diff = createParsedDiff({
       files: [createParsedDiffFile({ isBinary: true })],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toBe("CONTEXT_NO_REVIEWABLE_FILES");
+    expect(result).toEqual({ chunks: [], oversizedFilePaths: [] });
   });
 
-  it("returns CONTEXT_NO_REVIEWABLE_FILES when all files are deleted", () => {
+  it("returns no chunks when all files are deleted", () => {
     const diff = createParsedDiff({
       files: [createParsedDiffFile({ changeType: "deleted" })],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toBe("CONTEXT_NO_REVIEWABLE_FILES");
+    expect(result).toEqual({ chunks: [], oversizedFilePaths: [] });
   });
 
-  it("returns CONTEXT_NO_REVIEWABLE_FILES when all hunks are empty", () => {
+  it("returns no chunks when all hunks are empty", () => {
     const diff = createParsedDiff({
       files: [createParsedDiffFile({ hunks: [] })],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toBe("CONTEXT_NO_REVIEWABLE_FILES");
+    expect(result).toEqual({ chunks: [], oversizedFilePaths: [] });
   });
 
-  it("returns CONTEXT_NO_REVIEWABLE_FILES when files array is empty", () => {
+  it("returns no chunks when files array is empty", () => {
     const diff = createParsedDiff({ files: [] });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toBe("CONTEXT_NO_REVIEWABLE_FILES");
+    expect(result).toEqual({ chunks: [], oversizedFilePaths: [] });
   });
 
   // --- Filtering ---
@@ -80,12 +71,10 @@ describe("buildReviewContext", () => {
         createParsedDiffFile({ filePath: "src/code.ts", isBinary: false }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.chunks).toHaveLength(1);
-    expect(result.data.chunks[0]?.files[0]?.filePath).toBe("src/code.ts");
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.files[0]?.filePath).toBe("src/code.ts");
   });
 
   it("filters out deleted files from review", () => {
@@ -98,11 +87,9 @@ describe("buildReviewContext", () => {
         }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    const allFiles = result.data.chunks.flatMap((c) => c.files);
+    const allFiles = result.chunks.flatMap((c) => c.files);
     expect(allFiles).toHaveLength(1);
     expect(allFiles[0]?.filePath).toBe("src/kept.ts");
   });
@@ -127,11 +114,9 @@ describe("buildReviewContext", () => {
       ],
     ]);
 
-    const result = buildReviewContext(diff, astMap, emptyContentMap);
-    expect(result.success).toBe(true);
-    if (!result.success) return;
+    const result = buildReviewContext(diff, astMap);
 
-    const enrichedHunks = result.data.chunks[0]?.files[0]?.enrichedHunks ?? [];
+    const enrichedHunks = result.chunks[0]?.files[0]?.enrichedHunks ?? [];
     expect(enrichedHunks).toHaveLength(1);
     expect(enrichedHunks[0]?.enclosingScopes).toHaveLength(1);
     expect(enrichedHunks[0]?.enclosingScopes[0]?.name).toBe("overlapping");
@@ -141,26 +126,13 @@ describe("buildReviewContext", () => {
     const diff = createParsedDiff({
       files: [createParsedDiffFile({ filePath: "src/no-ast.ts" })],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    const file = result.data.chunks[0]?.files[0];
+    const file = result.chunks[0]?.files[0];
     expect(file?.imports).toEqual([]);
     for (const eh of file?.enrichedHunks ?? []) {
       expect(eh.enclosingScopes).toEqual([]);
     }
-  });
-
-  it("handles files with no file content gracefully", () => {
-    const diff = createParsedDiff({
-      files: [createParsedDiffFile({ filePath: "src/no-content.ts" })],
-    });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
-
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.chunks[0]?.files[0]?.fullFileContent).toBeNull();
   });
 
   it("includes imports from AST context", () => {
@@ -179,12 +151,10 @@ describe("buildReviewContext", () => {
       ],
     ]);
 
-    const result = buildReviewContext(diff, astMap, emptyContentMap);
-    expect(result.success).toBe(true);
-    if (!result.success) return;
+    const result = buildReviewContext(diff, astMap);
 
-    expect(result.data.chunks[0]?.files[0]?.imports).toHaveLength(1);
-    expect(result.data.chunks[0]?.files[0]?.imports[0]?.source).toBe("react");
+    expect(result.chunks[0]?.files[0]?.imports).toHaveLength(1);
+    expect(result.chunks[0]?.files[0]?.imports[0]?.source).toBe("react");
   });
 
   // --- Prioritization ---
@@ -196,11 +166,9 @@ describe("buildReviewContext", () => {
         createParsedDiffFile({ filePath: "src/auth/login.ts" }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    const allFiles = result.data.chunks.flatMap((c) => c.files);
+    const allFiles = result.chunks.flatMap((c) => c.files);
     expect(allFiles[0]?.filePath).toBe("src/auth/login.ts");
   });
 
@@ -224,11 +192,9 @@ describe("buildReviewContext", () => {
         createParsedDiffFile({ filePath: "src/large.ts", hunks: [largeHunk] }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    const allFiles = result.data.chunks.flatMap((c) => c.files);
+    const allFiles = result.chunks.flatMap((c) => c.files);
     expect(allFiles[0]?.filePath).toBe("src/large.ts");
     expect(allFiles[1]?.filePath).toBe("src/small.ts");
   });
@@ -242,12 +208,10 @@ describe("buildReviewContext", () => {
         createParsedDiffFile({ filePath: "src/b.ts" }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.chunks).toHaveLength(1);
-    expect(result.data.chunks[0]?.files).toHaveLength(2);
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.files).toHaveLength(2);
   });
 
   it("chunks files to stay within max token budget", () => {
@@ -264,14 +228,12 @@ describe("buildReviewContext", () => {
         }),
       ],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap, {
+    const result = buildReviewContext(diff, emptyAstMap, {
       maxTokensPerChunk: 500,
     });
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.chunks).toHaveLength(2);
-    expect(result.data.oversizedFilePaths).toEqual([]);
+    expect(result.chunks).toHaveLength(2);
+    expect(result.oversizedFilePaths).toEqual([]);
   });
 
   it("skips a file larger than a whole chunk and reports it", () => {
@@ -285,18 +247,16 @@ describe("buildReviewContext", () => {
       ],
     });
 
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap, {
+    const result = buildReviewContext(diff, emptyAstMap, {
       maxTokensPerChunk: 500,
     });
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.oversizedFilePaths).toEqual(["fixtures/huge.json"]);
-    const reviewed = result.data.chunks.flatMap((chunk) =>
+    expect(result.oversizedFilePaths).toEqual(["fixtures/huge.json"]);
+    const reviewed = result.chunks.flatMap((chunk) =>
       chunk.files.map((file) => file.filePath),
     );
     expect(reviewed).toEqual(["src/small.ts"]);
-    for (const chunk of result.data.chunks) {
+    for (const chunk of result.chunks) {
       expect(chunk.estimatedTokenCount).toBeLessThanOrEqual(500);
     }
   });
@@ -305,14 +265,10 @@ describe("buildReviewContext", () => {
     const diff = createParsedDiff({
       files: [createParsedDiffFile({ filePath: "src/code.ts" })],
     });
-    const result = buildReviewContext(diff, emptyAstMap, emptyContentMap);
+    const result = buildReviewContext(diff, emptyAstMap);
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
     // Token count should be a positive integer
-    expect(result.data.chunks[0]?.estimatedTokenCount).toBeGreaterThan(0);
-    expect(Number.isInteger(result.data.chunks[0]?.estimatedTokenCount)).toBe(
-      true,
-    );
+    expect(result.chunks[0]?.estimatedTokenCount).toBeGreaterThan(0);
+    expect(Number.isInteger(result.chunks[0]?.estimatedTokenCount)).toBe(true);
   });
 });

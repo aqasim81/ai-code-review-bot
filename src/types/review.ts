@@ -90,7 +90,6 @@ export interface FileReviewContext {
   readonly changeType: FileChangeType;
   readonly enrichedHunks: readonly EnrichedHunk[];
   readonly imports: readonly AstImport[];
-  readonly fullFileContent: string | null;
 }
 
 export interface ReviewChunk {

@@ -18,7 +18,10 @@ import {
   buildReviewSummary,
   mapFindingsToGitHubComments,
 } from "@/lib/review/comment-mapper";
-import { buildReviewContext } from "@/lib/review/context-builder";
+import {
+  buildReviewContext,
+  filterReviewableFiles,
+} from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
 import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
@@ -30,38 +33,14 @@ import { err, ok } from "@/types/results";
 import type {
   AstFileContext,
   ParsedDiff,
+  ParsedDiffFile,
   ReviewChunk,
   ReviewClaimRef,
   ReviewContext,
   ReviewEngineResult,
   ReviewFinding,
   ReviewRequest,
-  SupportedLanguage,
 } from "@/types/review";
-
-const SUPPORTED_LANGUAGES = new Set<string>([
-  "typescript",
-  "javascript",
-  "python",
-  "go",
-  "rust",
-  "java",
-]);
-
-function isSupportedLanguage(language: string): language is SupportedLanguage {
-  return SUPPORTED_LANGUAGES.has(language);
-}
-
-function parseRepositoryFullNameAsResult(
-  fullName: string,
-): Result<{ owner: string; repo: string }, "REVIEW_DB_ERROR"> {
-  const parsed = parseRepositoryFullName(fullName);
-  if (parsed === null) {
-    logger.error("Invalid repository full name", { fullName });
-    return err("REVIEW_DB_ERROR");
-  }
-  return ok(parsed);
-}
 
 async function lookupRepository(
   request: ReviewRequest,
@@ -212,11 +191,33 @@ async function markReviewFailed(
   }
 }
 
-function logClaimLost(claim: ReviewClaimRef, step: string): void {
+/**
+ * Why a review step stopped. Every failure but a lost claim marks the review
+ * FAILED with `reason`; a lost claim leaves the review to its current owner.
+ */
+type StepFailure =
+  | { readonly code: "REVIEW_CLAIM_LOST" }
+  | {
+      readonly code: Exclude<ReviewEngineError, "REVIEW_CLAIM_LOST">;
+      readonly reason: string;
+    };
+
+function stepFailed(
+  code: Exclude<ReviewEngineError, "REVIEW_CLAIM_LOST">,
+  reason: string,
+): Result<never, StepFailure> {
+  return err({ code, reason });
+}
+
+function claimLost(
+  claim: ReviewClaimRef,
+  step: string,
+): Result<never, StepFailure> {
   logger.warn("Review claim lost to another attempt, stopping", {
     reviewId: claim.reviewId,
     step,
   });
+  return err({ code: "REVIEW_CLAIM_LOST" });
 }
 
 const GITHUB_STEP_ERRORS = {
@@ -237,7 +238,7 @@ const GITHUB_STEP_ERRORS = {
 function reviewErrorForGitHubFailure(
   error: GitHubError,
   step: keyof typeof GITHUB_STEP_ERRORS,
-): ReviewEngineError {
+): Exclude<ReviewEngineError, "REVIEW_CLAIM_LOST"> {
   if (error === "GITHUB_RATE_LIMITED") return "REVIEW_GITHUB_RATE_LIMITED";
   if (
     error === "GITHUB_NOT_FOUND" ||
@@ -261,8 +262,7 @@ async function fetchAndParseDiff(
   owner: string,
   repo: string,
   pullNumber: number,
-  claim: ReviewClaimRef,
-): Promise<Result<ParsedDiff, ReviewEngineError>> {
+): Promise<Result<ParsedDiff, StepFailure>> {
   const diffResult = await githubService.fetchPullRequestDiff(
     owner,
     repo,
@@ -270,8 +270,10 @@ async function fetchAndParseDiff(
   );
   if (!diffResult.success) {
     logger.error("Failed to fetch diff", { error: diffResult.error });
-    await markReviewFailed(claim, "Failed to fetch PR diff");
-    return err(reviewErrorForGitHubFailure(diffResult.error, "diff"));
+    return stepFailed(
+      reviewErrorForGitHubFailure(diffResult.error, "diff"),
+      "Failed to fetch PR diff",
+    );
   }
 
   const parsedDiffResult = parseUnifiedDiff(diffResult.data);
@@ -279,8 +281,7 @@ async function fetchAndParseDiff(
     logger.error("Failed to parse diff", {
       error: parsedDiffResult.error,
     });
-    await markReviewFailed(claim, "Failed to parse PR diff");
-    return err("REVIEW_DIFF_PARSE_FAILED");
+    return stepFailed("REVIEW_DIFF_PARSE_FAILED", "Failed to parse PR diff");
   }
 
   return ok(parsedDiffResult.data);
@@ -327,7 +328,7 @@ async function fetchFileContentsForDiff(
 
 async function parseAstContextsForFiles(
   fileContents: ReadonlyMap<string, string>,
-  filePaths: readonly { path: string; language: string | null }[],
+  files: readonly ParsedDiffFile[],
 ): Promise<ReadonlyMap<string, AstFileContext>> {
   const astContexts = new Map<string, AstFileContext>();
 
@@ -339,8 +340,8 @@ async function parseAstContextsForFiles(
     return astContexts;
   }
 
-  for (const { path, language } of filePaths) {
-    if (!language || !isSupportedLanguage(language)) continue;
+  for (const { filePath: path, language } of files) {
+    if (!language) continue;
 
     const content = fileContents.get(path);
     if (!content) continue;
@@ -366,9 +367,10 @@ async function enrichDiffWithContext(
   owner: string,
   repo: string,
   commitSha: string,
-): Promise<Result<ReviewContext, "REVIEW_LLM_FAILED">> {
-  const reviewableFiles = parsedDiff.files.filter(
-    (f) => !f.isBinary && f.changeType !== "deleted",
+): Promise<ReviewContext> {
+  // Only files the AST parser can read need their full content.
+  const parseableFiles = filterReviewableFiles(parsedDiff.files).filter(
+    (f) => f.language !== null,
   );
 
   const fileContents = await fetchFileContentsForDiff(
@@ -376,41 +378,24 @@ async function enrichDiffWithContext(
     owner,
     repo,
     commitSha,
-    reviewableFiles.map((f) => f.filePath),
+    parseableFiles.map((f) => f.filePath),
   );
-
-  const fileLanguages = reviewableFiles.map((f) => ({
-    path: f.filePath,
-    language: f.language,
-  }));
   const astContexts = await parseAstContextsForFiles(
     fileContents,
-    fileLanguages,
+    parseableFiles,
   );
 
-  const contextResult = buildReviewContext(
-    parsedDiff,
-    astContexts,
-    fileContents,
-  );
-  if (!contextResult.success) {
-    logger.warn("Context build returned no reviewable files", {
-      error: contextResult.error,
-    });
-    return ok({ chunks: [], oversizedFilePaths: [] });
-  }
-  if (contextResult.data.oversizedFilePaths.length > 0) {
+  const reviewContext = buildReviewContext(parsedDiff, astContexts);
+  if (reviewContext.oversizedFilePaths.length > 0) {
     logger.warn("Skipping files too large to review", {
-      filePaths: contextResult.data.oversizedFilePaths,
+      filePaths: reviewContext.oversizedFilePaths,
     });
   }
-
-  return ok(contextResult.data);
+  return reviewContext;
 }
 
 interface LlmAnalysisResult {
   readonly findings: ReviewFinding[];
-  readonly summary: string;
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
 }
@@ -436,9 +421,7 @@ function describeFindingCount(findingCount: number): string {
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
-): Promise<
-  Result<LlmAnalysisResult, "REVIEW_LLM_FAILED" | "REVIEW_LLM_REJECTED">
-> {
+): Promise<Result<LlmAnalysisResult, StepFailure>> {
   const allFindings: ReviewFinding[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -450,10 +433,11 @@ async function analyzeAllChunks(
         error: result.error,
         fileCount: chunk.files.length,
       });
-      return err(
+      return stepFailed(
         REJECTED_LLM_ERRORS.has(result.error)
           ? "REVIEW_LLM_REJECTED"
           : "REVIEW_LLM_FAILED",
+        "LLM analysis failed",
       );
     }
 
@@ -464,7 +448,6 @@ async function analyzeAllChunks(
 
   return ok({
     findings: allFindings,
-    summary: describeFindingCount(allFindings.length),
     totalInputTokens,
     totalOutputTokens,
   });
@@ -513,23 +496,24 @@ function prepareGitHubReview(
   };
 }
 
-async function ensureClaimIsCurrent(
+/**
+ * Turns the result of a write guarded by the claim into a step result: a
+ * database error fails the review, a lost claim stops it.
+ */
+function requireClaimedWrite(
+  result: Result<boolean, string>,
   claim: ReviewClaimRef,
-): Promise<Result<void, ReviewEngineError>> {
-  const checkResult = await isReviewClaimCurrent(claim);
-  if (!checkResult.success) {
-    logger.error("Failed to check review claim before posting", {
+  step: string,
+  failureMessage: string,
+): Result<void, StepFailure> {
+  if (!result.success) {
+    logger.error(failureMessage, {
       reviewId: claim.reviewId,
-      error: checkResult.error,
+      error: result.error,
     });
-    await markReviewFailed(claim, "Failed to check review claim");
-    return err("REVIEW_DB_ERROR");
+    return stepFailed("REVIEW_DB_ERROR", failureMessage);
   }
-  if (!checkResult.data) {
-    logClaimLost(claim, "post");
-    return err("REVIEW_CLAIM_LOST");
-  }
-  return ok(undefined);
+  return result.data ? ok(undefined) : claimLost(claim, step);
 }
 
 /**
@@ -539,7 +523,7 @@ async function ensureClaimIsCurrent(
 async function wasPostedByEarlierAttempt(
   context: ReviewStepsContext,
   marker: string,
-): Promise<Result<boolean, ReviewEngineError>> {
+): Promise<Result<boolean, StepFailure>> {
   const { githubService, owner, repo, request, claim } = context;
   const lookupResult = await githubService.findPostedReview(
     owner,
@@ -552,11 +536,10 @@ async function wasPostedByEarlierAttempt(
       reviewId: claim.reviewId,
       error: lookupResult.error,
     });
-    await markReviewFailed(
-      claim,
+    return stepFailed(
+      reviewErrorForGitHubFailure(lookupResult.error, "post"),
       "Failed to check for an existing review on GitHub",
     );
-    return err(reviewErrorForGitHubFailure(lookupResult.error, "post"));
   }
   if (lookupResult.data) {
     logger.info("Review already posted by an earlier attempt, not reposting", {
@@ -570,9 +553,14 @@ async function wasPostedByEarlierAttempt(
 async function postReviewToGitHub(
   context: ReviewStepsContext,
   payload: PullRequestReviewPayload,
-): Promise<Result<void, ReviewEngineError>> {
+): Promise<Result<void, StepFailure>> {
   const { githubService, owner, repo, request, claim } = context;
-  const claimCheck = await ensureClaimIsCurrent(claim);
+  const claimCheck = requireClaimedWrite(
+    await isReviewClaimCurrent(claim),
+    claim,
+    "post",
+    "Failed to check review claim",
+  );
   if (!claimCheck.success) return claimCheck;
 
   const marker = buildReviewMarker(claim.reviewId);
@@ -592,8 +580,10 @@ async function postReviewToGitHub(
       reviewId: claim.reviewId,
       error: postResult.error,
     });
-    await markReviewFailed(claim, "Failed to post review to GitHub");
-    return err(reviewErrorForGitHubFailure(postResult.error, "post"));
+    return stepFailed(
+      reviewErrorForGitHubFailure(postResult.error, "post"),
+      "Failed to post review to GitHub",
+    );
   }
 
   logger.info("Review posted to GitHub", {
@@ -607,7 +597,7 @@ async function saveFindingsOrFailReview(
   claim: ReviewClaimRef,
   summary: string,
   findings: readonly ReviewFinding[],
-): Promise<Result<void, ReviewEngineError>> {
+): Promise<Result<void, StepFailure>> {
   const saveResult = await saveReviewFindings({
     ...claim,
     summary,
@@ -623,39 +613,26 @@ async function saveFindingsOrFailReview(
       githubCommentId: null,
     })),
   });
-  if (!saveResult.success) {
-    logger.error("Failed to save review results", {
-      reviewId: claim.reviewId,
-      error: saveResult.error,
-    });
-    await markReviewFailed(claim, "Failed to save review results");
-    return err("REVIEW_DB_ERROR");
-  }
-  if (!saveResult.data) {
-    logClaimLost(claim, "save");
-    return err("REVIEW_CLAIM_LOST");
-  }
-  return ok(undefined);
+  return requireClaimedWrite(
+    saveResult,
+    claim,
+    "save",
+    "Failed to save review results",
+  );
 }
 
 async function completeReviewOrFail(
   claim: ReviewClaimRef,
   startTime: number,
-): Promise<Result<number, ReviewEngineError>> {
+): Promise<Result<number, StepFailure>> {
   const processingTimeMs = Date.now() - startTime;
-  const completeResult = await markReviewCompleted(claim, processingTimeMs);
-  if (!completeResult.success) {
-    logger.error("Failed to mark review completed", {
-      reviewId: claim.reviewId,
-      error: completeResult.error,
-    });
-    await markReviewFailed(claim, "Failed to mark review completed");
-    return err("REVIEW_DB_ERROR");
-  }
-  if (!completeResult.data) {
-    logClaimLost(claim, "complete");
-    return err("REVIEW_CLAIM_LOST");
-  }
+  const completeResult = requireClaimedWrite(
+    await markReviewCompleted(claim, processingTimeMs),
+    claim,
+    "complete",
+    "Failed to mark review completed",
+  );
+  if (!completeResult.success) return completeResult;
   return ok(processingTimeMs);
 }
 
@@ -663,7 +640,7 @@ async function completeReviewEarly(
   claim: ReviewClaimRef,
   startTime: number,
   summary: string,
-): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+): Promise<Result<ReviewEngineResult, StepFailure>> {
   const saveResult = await saveFindingsOrFailReview(claim, summary, []);
   if (!saveResult.success) return saveResult;
   const completeResult = await completeReviewOrFail(claim, startTime);
@@ -688,7 +665,7 @@ interface ReviewStepsContext {
 
 async function runReviewSteps(
   context: ReviewStepsContext,
-): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+): Promise<Result<ReviewEngineResult, StepFailure>> {
   const { claim, request, owner, repo, githubService, startTime } = context;
 
   const diffResult = await fetchAndParseDiff(
@@ -696,7 +673,6 @@ async function runReviewSteps(
     owner,
     repo,
     request.pullRequestNumber,
-    claim,
   );
   if (!diffResult.success) return diffResult;
 
@@ -717,18 +693,13 @@ async function runReviewSteps(
     );
   }
 
-  const reviewContext = await enrichDiffWithContext(
+  const { chunks, oversizedFilePaths } = await enrichDiffWithContext(
     githubService,
     parsedDiff,
     owner,
     repo,
     request.commitSha,
   );
-  if (!reviewContext.success) {
-    await markReviewFailed(claim, "Context enrichment failed");
-    return err("REVIEW_LLM_FAILED");
-  }
-  const { chunks, oversizedFilePaths } = reviewContext.data;
   const oversizedNote = describeOversizedFiles(oversizedFilePaths);
   if (chunks.length === 0) {
     return completeReviewEarly(
@@ -746,19 +717,17 @@ async function analyzeSaveAndPostReview(
   chunks: readonly ReviewChunk[],
   parsedDiff: ParsedDiff,
   oversizedNote: string | null,
-): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
+): Promise<Result<ReviewEngineResult, StepFailure>> {
   const { claim, request, llmService, startTime } = context;
   const { reviewId } = claim;
 
   const llmResult = await analyzeAllChunks(llmService, chunks);
-  if (!llmResult.success) {
-    await markReviewFailed(claim, "LLM analysis failed");
-    return llmResult;
-  }
+  if (!llmResult.success) return llmResult;
   const { findings } = llmResult.data;
+  const findingCountText = describeFindingCount(findings.length);
   const summary = oversizedNote
-    ? `${llmResult.data.summary}\n\n${oversizedNote}`
-    : llmResult.data.summary;
+    ? `${findingCountText}\n\n${oversizedNote}`
+    : findingCountText;
 
   logger.info("LLM analysis complete", {
     findingCount: findings.length,
@@ -804,7 +773,12 @@ async function runReviewStepsWithFailureGuard(
   context: ReviewStepsContext,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
   try {
-    return await runReviewSteps(context);
+    const result = await runReviewSteps(context);
+    if (result.success) return result;
+    if ("reason" in result.error) {
+      await markReviewFailed(context.claim, result.error.reason);
+    }
+    return err(result.error.code);
   } catch (error) {
     logger.error("Unexpected error during review", {
       reviewId: context.claim.reviewId,
@@ -824,11 +798,14 @@ export async function executeReview(
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
   const startTime = Date.now();
 
-  const nameResult = parseRepositoryFullNameAsResult(
-    request.repositoryFullName,
-  );
-  if (!nameResult.success) return nameResult;
-  const { owner, repo } = nameResult.data;
+  const repositoryName = parseRepositoryFullName(request.repositoryFullName);
+  if (repositoryName === null) {
+    logger.error("Invalid repository full name", {
+      fullName: request.repositoryFullName,
+    });
+    return err("REVIEW_DB_ERROR");
+  }
+  const { owner, repo } = repositoryName;
 
   logger.info("Starting review", {
     repository: request.repositoryFullName,
