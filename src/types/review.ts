@@ -112,7 +112,6 @@ export interface ReviewFinding {
 
 export interface ReviewResult {
   readonly findings: readonly ReviewFinding[];
-  readonly summary: string;
   readonly tokenUsage: {
     readonly inputTokens: number;
     readonly outputTokens: number;
