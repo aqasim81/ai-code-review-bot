@@ -13,12 +13,12 @@ import { logger } from "@/lib/logger";
 import type { AccessScope } from "@/types/access";
 import type { RepositoryId } from "@/types/branded";
 import { repositorySettingsSchema } from "@/types/settings";
+import { isRecordId } from "./record-id";
 
 type ActionResult = { success: true } | { success: false; error: string };
 
 // Server actions are callable with any serialisable arguments, not only the
 // ones the UI sends, so check their shape before using them in a query.
-const repositoryIdSchema = z.string().uuid();
 const isEnabledSchema = z.boolean();
 
 const UNAUTHORIZED: ActionResult = { success: false, error: "Unauthorized" };
@@ -66,7 +66,7 @@ export async function toggleRepositoryEnabledAction(
   isEnabled: boolean,
 ): Promise<ActionResult> {
   if (
-    !repositoryIdSchema.safeParse(repositoryId).success ||
+    !isRecordId(repositoryId) ||
     !isEnabledSchema.safeParse(isEnabled).success
   ) {
     return UNAUTHORIZED;
@@ -98,10 +98,7 @@ export async function saveRepositorySettingsAction(
   repositoryId: string,
   formData: FormData,
 ): Promise<ActionResult> {
-  if (
-    !repositoryIdSchema.safeParse(repositoryId).success ||
-    !(formData instanceof FormData)
-  ) {
+  if (!isRecordId(repositoryId) || !(formData instanceof FormData)) {
     return UNAUTHORIZED;
   }
   const authorization = await authorizeRepositoryManagement(

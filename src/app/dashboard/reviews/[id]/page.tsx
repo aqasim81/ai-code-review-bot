@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { getReviewWithCommentsInScope } from "@/lib/db/queries";
 import type { ReviewId } from "@/types/branded";
 import { loadedDataOrLogFailures } from "../../loaded-data";
+import { isRecordId } from "../../record-id";
 
 interface ReviewDetailPageProps {
   params: Promise<{ id: string }>;
@@ -22,6 +23,11 @@ export default async function ReviewDetailPage({
   const session = await getSession();
   if (!session) {
     redirect("/");
+  }
+
+  // A malformed id can't match a record: answer 404 without a query.
+  if (!isRecordId(id)) {
+    notFound();
   }
 
   const reviewResult = await getReviewWithCommentsInScope(

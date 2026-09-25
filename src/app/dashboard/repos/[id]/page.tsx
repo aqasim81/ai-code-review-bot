@@ -9,6 +9,7 @@ import { canManageRepository } from "@/lib/github/repository-access";
 import type { RepositoryId } from "@/types/branded";
 import { mergeWithDefaults } from "@/types/settings";
 import { loadedDataOrLogFailures } from "../../loaded-data";
+import { isRecordId } from "../../record-id";
 
 interface RepoSettingsPageProps {
   params: Promise<{ id: string }>;
@@ -21,6 +22,11 @@ export default async function RepoSettingsPage({
   const session = await getSession();
   if (!session) {
     redirect("/");
+  }
+
+  // A malformed id can't match a record: answer 404 without a query.
+  if (!isRecordId(id)) {
+    notFound();
   }
 
   const repoResult = await findAccessibleRepositoryById(

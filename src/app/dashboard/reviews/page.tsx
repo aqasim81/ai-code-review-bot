@@ -19,6 +19,7 @@ import {
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
 import { loadedDataOrLogFailures } from "../loaded-data";
+import { isRecordId } from "../record-id";
 
 interface ReviewsPageProps {
   searchParams: Promise<{
@@ -44,12 +45,16 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
     listRepositoriesInScope(session.access),
     listReviewsInScope({
       scope: session.access,
-      repositoryId: params.repo ? (params.repo as RepositoryId) : undefined,
+      // A malformed repo or cursor can't match a record; ignore it like an
+      // unknown status rather than sending it to the database.
+      repositoryId: isRecordId(params.repo)
+        ? (params.repo as RepositoryId)
+        : undefined,
       status:
         params.status && VALID_STATUSES.has(params.status)
           ? (params.status as ReviewStatus)
           : undefined,
-      cursor: params.cursor,
+      cursor: isRecordId(params.cursor) ? params.cursor : undefined,
       limit: 20,
     }),
   ]);
