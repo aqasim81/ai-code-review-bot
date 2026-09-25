@@ -1,7 +1,8 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
 import { env } from "@/lib/env";
-import { fetchUserInstallations } from "@/lib/github/user-installations";
+import { fetchUserInstallationIds } from "@/lib/github/user-installations";
+import { logger } from "@/lib/logger";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -27,12 +28,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.accessToken = account.access_token ?? undefined;
 
         if (account.access_token) {
-          const result = await fetchUserInstallations(account.access_token);
+          const result = await fetchUserInstallationIds(account.access_token);
           if (result.success) {
-            token.installationIds = result.data.map(
-              (installation) => installation.id,
-            );
+            token.installationIds = [...result.data];
           } else {
+            logger.warn("Failed to fetch user installations at sign-in", {
+              error: result.error,
+            });
             token.installationIds = [];
           }
         }

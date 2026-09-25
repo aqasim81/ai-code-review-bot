@@ -15,7 +15,6 @@ export default defineConfig({
         "src/lib/db/prisma-client.ts",
         "src/lib/db/queries.ts",
         "src/lib/github/api.ts",
-        "src/lib/github/user-installations.ts",
         "src/lib/queue/connection.ts",
         "src/lib/queue/producer.ts",
         "src/lib/env.ts",
