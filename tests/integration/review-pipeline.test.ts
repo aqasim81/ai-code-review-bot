@@ -282,6 +282,30 @@ describe("executeReview — review pipeline", () => {
     );
   });
 
+  it("marks the review FAILED, not COMPLETED, when saving its comments fails", async () => {
+    vi.mocked(saveReviewComments).mockResolvedValue(err("DB write failed"));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(
+          ok(createReviewResult({ findings: [createReviewFinding()] })),
+        ),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_DB_ERROR");
+    expect(failReview).toHaveBeenCalledWith(reviewId(), expect.any(String));
+    expect(completeReview).not.toHaveBeenCalled();
+  });
+
   it("filters files by filePathFilter for delta reviews", async () => {
     const multiFileDiff = [
       "diff --git a/src/a.ts b/src/a.ts",
