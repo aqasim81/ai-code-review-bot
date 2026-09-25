@@ -58,29 +58,22 @@ export function parseTruncatedLlmReviewResponse(
     return err("LLM_INVALID_RESPONSE");
   }
 
-  const completeEnd = findEndOfCompleteItems(responseText, arrayStart);
-  if (completeEnd === null) {
+  const repaired = closeAfterCompleteItems(responseText, arrayStart);
+  if (repaired === null) {
     return err("LLM_INVALID_RESPONSE");
   }
-
-  const repaired = `${responseText.slice(arrayStart, completeEnd.index + 1)}${completeEnd.arrayClosed ? "" : "]"}`;
   return parseLlmReviewResponse(repaired, confidenceThreshold);
 }
 
-interface CompleteItemsEnd {
-  readonly index: number;
-  readonly arrayClosed: boolean;
-}
-
 /**
- * Scans JSON text from the opening "[" and returns where the last complete
- * array item ends, or where the array closes. Brackets inside strings are
- * ignored.
+ * Scans JSON text from the opening "[" and returns the array up to where it
+ * closes, or up to its last complete item with "]" appended. Brackets inside
+ * strings are ignored. Null when no item is complete.
  */
-function findEndOfCompleteItems(
+function closeAfterCompleteItems(
   text: string,
   arrayStart: number,
-): CompleteItemsEnd | null {
+): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -98,14 +91,14 @@ function findEndOfCompleteItems(
     else if (char === "{" || char === "[") depth++;
     else if (char === "}" || char === "]") {
       depth--;
-      if (depth === 0) return { index: i, arrayClosed: true };
+      if (depth === 0) return text.slice(arrayStart, i + 1);
       if (depth === 1) lastItemEnd = i;
     }
   }
 
   return lastItemEnd === null
     ? null
-    : { index: lastItemEnd, arrayClosed: false };
+    : `${text.slice(arrayStart, lastItemEnd + 1)}]`;
 }
 
 function validateFindings(
