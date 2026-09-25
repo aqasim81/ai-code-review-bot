@@ -87,7 +87,8 @@ describe("fetchUserRepositoryAccessShared", () => {
   });
 
   it("passes a failed fetch through", async () => {
-    vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(err("revoked"));
+    const revoked = { kind: "permanent", message: "Bad credentials" } as const;
+    vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(err(revoked));
     const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 
     const result = await fetchUserRepositoryAccessShared("token", {
@@ -95,6 +96,58 @@ describe("fetchUserRepositoryAccessShared", () => {
       forced: true,
     });
 
-    expect(result).toEqual(err("revoked"));
+    expect(result).toEqual(err(revoked));
+  });
+
+  // A failure a retry can fix is shared only while it is in flight: the next
+  // refresh, forced or not, asks GitHub again (#118).
+  it.each([true, false])(
+    "does not reuse a retryable failure (forced: %s)",
+    async (forced) => {
+      vi.mocked(fetchUserRepositoryAccess)
+        .mockResolvedValueOnce(
+          err({ kind: "retryable", message: "Bad Gateway" }),
+        )
+        .mockResolvedValueOnce(ok(ACCESS));
+      const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+      await fetchUserRepositoryAccessShared("token", { now: 0, forced });
+      const retried = await fetchUserRepositoryAccessShared("token", {
+        now: 3_000,
+        forced,
+      });
+
+      expect(retried).toEqual(ok({ access: ACCESS, fetchedAt: 3_000 }));
+      expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("shares one in-flight fetch even when it fails", async () => {
+    vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(
+      err({ kind: "retryable", message: "Bad Gateway" }),
+    );
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    await Promise.all([
+      fetchUserRepositoryAccessShared("token", { now: 0, forced: true }),
+      fetchUserRepositoryAccessShared("token", { now: 0, forced: true }),
+    ]);
+
+    expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a rate-limited failure so a pending retry does not ask GitHub again", async () => {
+    vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(
+      err({ kind: "rate-limited", message: "API rate limit exceeded" }),
+    );
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    await fetchUserRepositoryAccessShared("token", { now: 0, forced: true });
+    await fetchUserRepositoryAccessShared("token", {
+      now: 5_000,
+      forced: false,
+    });
+
+    expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(1);
   });
 });

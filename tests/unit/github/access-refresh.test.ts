@@ -6,7 +6,7 @@ import {
   refreshAccessState,
 } from "@/lib/github/access-refresh";
 import { EMPTY_USER_ACCESS } from "@/lib/github/repository-access";
-import type { UserAccess } from "@/types/access";
+import type { UserAccess, UserAccessFetchError } from "@/types/access";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
@@ -24,13 +24,29 @@ const NARROWER_ACCESS: UserAccess = {
   truncated: false,
 };
 const FETCHED_AT = 1_000_000_000_000;
+const SERVER_ERROR: UserAccessFetchError = {
+  kind: "retryable",
+  message: "Bad Gateway",
+};
+const RATE_LIMITED: UserAccessFetchError = {
+  kind: "rate-limited",
+  message: "API rate limit exceeded",
+};
+const TOKEN_REVOKED: UserAccessFetchError = {
+  kind: "permanent",
+  message: "Bad credentials",
+};
 
 type FetchAccess = (
   accessToken: string,
-) => Promise<Result<FetchedAccess, string>>;
+) => Promise<Result<FetchedAccess, UserAccessFetchError>>;
 
 function stateFetchedAt(fetchedAt: number, checkedAt = fetchedAt): AccessState {
-  return { access: OLD_ACCESS, fetchedAt, checkedAt };
+  return { access: OLD_ACCESS, fetchedAt, checkedAt, pending: false };
+}
+
+function fetchFailingWith(error: UserAccessFetchError) {
+  return vi.fn<FetchAccess>().mockResolvedValue(err(error));
 }
 
 function fetchSucceedingAt(fetchedAt: number) {
@@ -75,7 +91,12 @@ describe("refreshAccessState", () => {
     const { promise } = refreshAt(now);
 
     expect(await promise).toEqual({
-      state: { access: NARROWER_ACCESS, fetchedAt: now, checkedAt: now },
+      state: {
+        access: NARROWER_ACCESS,
+        fetchedAt: now,
+        checkedAt: now,
+        pending: false,
+      },
       outcome: { kind: "refreshed" },
     });
   });
@@ -92,12 +113,17 @@ describe("refreshAccessState", () => {
   it("keeps the old access after one failed refresh and reports the error", async () => {
     const now = FETCHED_AT + 6 * MINUTE;
     const { promise } = refreshAt(now, {
-      fetchAccess: vi.fn<FetchAccess>().mockResolvedValue(err("boom")),
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
     });
 
     expect(await promise).toEqual({
-      state: { access: OLD_ACCESS, fetchedAt: FETCHED_AT, checkedAt: now },
-      outcome: { kind: "failed", error: "boom" },
+      state: {
+        access: OLD_ACCESS,
+        fetchedAt: FETCHED_AT,
+        checkedAt: now,
+        pending: false,
+      },
+      outcome: { kind: "failed", error: SERVER_ERROR },
     });
   });
 
@@ -111,7 +137,7 @@ describe("refreshAccessState", () => {
 
   it("drops the access to nothing once it is two intervals old without a successful refresh", async () => {
     const { promise } = refreshAt(FETCHED_AT + 10 * MINUTE, {
-      fetchAccess: vi.fn<FetchAccess>().mockResolvedValue(err("boom")),
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
     });
 
     expect((await promise).state.access).toEqual(EMPTY_USER_ACCESS);
@@ -137,7 +163,12 @@ describe("refreshAccessState", () => {
 
   it("refreshes a token from before this change right away", async () => {
     const { fetchAccess } = refreshAt(FETCHED_AT, {
-      state: { access: EMPTY_USER_ACCESS, fetchedAt: 0, checkedAt: 0 },
+      state: {
+        access: EMPTY_USER_ACCESS,
+        fetchedAt: 0,
+        checkedAt: 0,
+        pending: false,
+      },
     });
 
     expect(fetchAccess).toHaveBeenCalledOnce();
@@ -153,9 +184,135 @@ describe("refreshAccessState", () => {
         access: EMPTY_USER_ACCESS,
         fetchedAt: FETCHED_AT,
         checkedAt: FETCHED_AT,
+        pending: false,
       },
       outcome: { kind: "unchanged" },
     });
     expect(fetchAccess).not.toHaveBeenCalled();
+  });
+});
+
+// A refresh the user asked for (sign-in, or right after installing the app)
+// that fails in a way a retry can fix stays due, and is retried within
+// seconds rather than at the next regular refresh (#118).
+describe("refreshAccessState after a requested refresh fails", () => {
+  const SIGN_IN_STATE: AccessState = {
+    access: EMPTY_USER_ACCESS,
+    fetchedAt: 0,
+    checkedAt: 0,
+    pending: false,
+  };
+
+  it("marks a failed sign-in refresh as pending", async () => {
+    const { promise } = refreshAt(FETCHED_AT, {
+      state: SIGN_IN_STATE,
+      forced: true,
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    });
+
+    expect(await promise).toEqual({
+      state: { ...SIGN_IN_STATE, checkedAt: FETCHED_AT, pending: true },
+      outcome: { kind: "failed", error: SERVER_ERROR },
+    });
+  });
+
+  it("retries a pending refresh after a few seconds, not a minute", async () => {
+    const pendingState = {
+      ...SIGN_IN_STATE,
+      checkedAt: FETCHED_AT,
+      pending: true,
+    };
+
+    const early = refreshAt(FETCHED_AT + 4_000, { state: pendingState });
+    const due = refreshAt(FETCHED_AT + 5_000, { state: pendingState });
+    await Promise.all([early.promise, due.promise]);
+
+    expect(early.fetchAccess).not.toHaveBeenCalled();
+    expect(due.fetchAccess).toHaveBeenCalledOnce();
+  });
+
+  it("keeps retrying a failed refresh after installing even though the old access is fresh", async () => {
+    const afterInstall = await refreshAt(FETCHED_AT + MINUTE, {
+      forced: true,
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    }).promise;
+    expect(afterInstall.state.access).toEqual(OLD_ACCESS);
+    expect(afterInstall.state.pending).toBe(true);
+
+    const retry = refreshAt(FETCHED_AT + MINUTE + 5_000, {
+      state: afterInstall.state,
+    });
+
+    expect((await retry.promise).state).toEqual({
+      access: NARROWER_ACCESS,
+      fetchedAt: FETCHED_AT + MINUTE + 5_000,
+      checkedAt: FETCHED_AT + MINUTE + 5_000,
+      pending: false,
+    });
+  });
+
+  it("stays pending through a rate limit", async () => {
+    const { promise } = refreshAt(FETCHED_AT, {
+      state: SIGN_IN_STATE,
+      forced: true,
+      fetchAccess: fetchFailingWith(RATE_LIMITED),
+    });
+
+    expect((await promise).state.pending).toBe(true);
+  });
+
+  it("stops retrying early when a retry cannot help", async () => {
+    const { promise } = refreshAt(FETCHED_AT, {
+      state: { ...SIGN_IN_STATE, checkedAt: FETCHED_AT - 5_000, pending: true },
+      fetchAccess: fetchFailingWith(TOKEN_REVOKED),
+    });
+
+    expect((await promise).state.pending).toBe(false);
+  });
+
+  it("does not mark a failed regular refresh as pending", async () => {
+    const { promise } = refreshAt(FETCHED_AT + 6 * MINUTE, {
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    });
+
+    expect((await promise).state.pending).toBe(false);
+  });
+
+  // A regular refresh that keeps failing must not end in empty access that
+  // looks like "no installations" while GitHub is down (#118).
+  it("marks a retryable failure pending once the access has expired", async () => {
+    const { promise } = refreshAt(FETCHED_AT + 10 * MINUTE, {
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    });
+
+    expect((await promise).state).toEqual({
+      access: EMPTY_USER_ACCESS,
+      fetchedAt: FETCHED_AT,
+      checkedAt: FETCHED_AT + 10 * MINUTE,
+      pending: true,
+    });
+  });
+
+  it("marks a retryable failure pending when the access expires before the next retry", async () => {
+    const failed = await refreshAt(FETCHED_AT + 9.5 * MINUTE, {
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    }).promise;
+    expect(failed.state.pending).toBe(true);
+
+    const expired = await refreshAt(FETCHED_AT + 10 * MINUTE, {
+      state: failed.state,
+      fetchAccess: fetchFailingWith(SERVER_ERROR),
+    }).promise;
+
+    expect(expired.state.access).toEqual(EMPTY_USER_ACCESS);
+    expect(expired.state.pending).toBe(true);
+  });
+
+  it("does not mark a permanent failure pending when the access expires", async () => {
+    const { promise } = refreshAt(FETCHED_AT + 10 * MINUTE, {
+      fetchAccess: fetchFailingWith(TOKEN_REVOKED),
+    });
+
+    expect((await promise).state.pending).toBe(false);
   });
 });

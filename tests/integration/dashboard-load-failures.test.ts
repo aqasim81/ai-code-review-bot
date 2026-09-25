@@ -18,6 +18,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/db/queries");
 
 import { toggleRepositoryEnabledAction } from "@/app/dashboard/actions";
+import DashboardLayout from "@/app/dashboard/layout";
 import DashboardPage from "@/app/dashboard/page";
 import RepoSettingsPage from "@/app/dashboard/repos/[id]/page";
 import RepositoriesPage from "@/app/dashboard/repos/page";
@@ -193,6 +194,72 @@ describe("dashboard pages when a database query fails", () => {
       expect(logger.error).not.toHaveBeenCalled();
     },
   );
+});
+
+// At sign-in, or in the refresh right after installing the app, a GitHub
+// error leaves the session without the new access. That is not an answer
+// that the user has no installations (#118).
+describe("dashboard pages while loading the user's GitHub access has failed", () => {
+  const PENDING_SESSION = {
+    ...SESSION,
+    access: {
+      githubInstallationIds: [],
+      accessibleGithubRepoIds: [],
+      manageableGithubRepoIds: [],
+      truncated: false,
+    },
+    accessPending: true,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGetSession.mockResolvedValue(PENDING_SESSION);
+    allQueriesSucceedWithNoRows();
+    vi.mocked(findInstallationsByGitHubIds).mockResolvedValue(ok([]));
+  });
+
+  it.each([
+    ["dashboard", renderDashboard],
+    ["reviews", renderReviews],
+    ["repositories", renderRepositories],
+  ] as const)(
+    "the %s page says the access could not be loaded, not that there are no installations",
+    async (_page, render) => {
+      const html = await render();
+
+      expect(html).toContain("Could not load your GitHub installations");
+      expect(html).not.toContain("No installations found");
+    },
+  );
+});
+
+// A user with installation A installs the app on B and the refresh after the
+// install fails: the old access still lists A, so every page needs a notice
+// that the list may be out of date, not only an empty one (#118).
+describe("dashboard layout while loading the user's GitHub access has failed", () => {
+  const renderLayout = () =>
+    renderPage(DashboardLayout({ children: "page content" }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("tells the user their installations may be out of date", async () => {
+    mockedGetSession.mockResolvedValue({ ...SESSION, accessPending: true });
+
+    const html = await renderLayout();
+
+    expect(html).toContain("Could not refresh your GitHub access");
+    expect(html).toContain("page content");
+  });
+
+  it("shows no notice once the access is loaded", async () => {
+    mockedGetSession.mockResolvedValue({ ...SESSION, accessPending: false });
+
+    const html = await renderLayout();
+
+    expect(html).not.toContain("Could not refresh your GitHub access");
+  });
 });
 
 // Ids are UUIDs. A malformed one from the URL (NUL, which Postgres rejects in

@@ -14,6 +14,8 @@ declare module "next-auth" {
       avatarUrl: string;
     };
     access: UserAccess;
+    /** Loading the access the user asked for failed and is being retried. */
+    accessPending: boolean;
   }
 }
 
@@ -26,5 +28,6 @@ declare module "next-auth/jwt" {
     access?: UserAccess;
     accessFetchedAt?: number;
     accessCheckedAt?: number;
+    accessPending?: boolean;
   }
 }

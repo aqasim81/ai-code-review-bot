@@ -54,7 +54,9 @@ export default async function RepositoriesPage() {
         description="Manage which repositories receive automated code reviews."
       />
 
-      {installationsWithRepos.length === 0 ? (
+      {installationsWithRepos.length === 0 && session.accessPending ? (
+        <LoadFailedCard what="your GitHub installations" />
+      ) : installationsWithRepos.length === 0 ? (
         <NoInstallationsCard />
       ) : (
         <div className="space-y-6">

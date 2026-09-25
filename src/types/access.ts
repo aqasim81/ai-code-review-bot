@@ -13,3 +13,13 @@ export interface UserAccess extends AccessScope {
   /** True when the user can access more repositories than the session holds. */
   readonly truncated: boolean;
 }
+
+/**
+ * Why the user's access could not be read from GitHub, by what a retry can do:
+ * a server error, timeout or race may pass within seconds; a rate limit lasts
+ * until it resets; a refused token never changes on a retry.
+ */
+export interface UserAccessFetchError {
+  readonly kind: "retryable" | "rate-limited" | "permanent";
+  readonly message: string;
+}

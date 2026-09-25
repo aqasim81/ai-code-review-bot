@@ -78,7 +78,11 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
     return (
       <div>
         <PageHeader title="Reviews" />
-        <NoInstallationsCard />
+        {session.accessPending ? (
+          <LoadFailedCard what="your GitHub installations" />
+        ) : (
+          <NoInstallationsCard />
+        )}
       </div>
     );
   }

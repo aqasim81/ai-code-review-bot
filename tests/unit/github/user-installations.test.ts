@@ -10,6 +10,7 @@ const github = vi.hoisted(() => ({
   repositoriesByInstallation: new Map<number, MockRepository[]>(),
   pagesServed: 0,
   failInstallationId: null as number | null,
+  failure: new Error("Bad credentials") as Error,
 }));
 
 const octokitMocks = vi.hoisted(() => ({
@@ -33,7 +34,7 @@ async function paginate(
   }
   const installationId = params.installation_id ?? -1;
   if (installationId === github.failInstallationId) {
-    throw new Error("Bad credentials");
+    throw github.failure;
   }
   const all = github.repositoriesByInstallation.get(installationId) ?? [];
   const results: MockRepository[] = [];
@@ -86,6 +87,7 @@ describe("fetchUserRepositoryAccess", () => {
     github.repositoriesByInstallation = new Map();
     github.pagesServed = 0;
     github.failInstallationId = null;
+    github.failure = new Error("Bad credentials");
   });
 
   it("collects accessible and manageable repositories per installation", async () => {
@@ -168,7 +170,60 @@ describe("fetchUserRepositoryAccess", () => {
 
     expect(result).toEqual({
       success: false,
-      error: "Failed to fetch user repository access: Bad credentials",
+      error: {
+        kind: "retryable",
+        message: "Failed to fetch user repository access: Bad credentials",
+      },
+    });
+  });
+
+  // Octokit reports an HTTP error with its status (and a timeout or network
+  // error as 500), so the caller can tell a retry that helps from one that
+  // doesn't (#118).
+  it.each([
+    ["a server error", githubError("Bad Gateway", 502), "retryable"],
+    ["a timeout", githubError("This operation was aborted", 500), "retryable"],
+    [
+      "an installation removed since the list was read",
+      githubError("Not Found", 404),
+      "retryable",
+    ],
+    ["a rate limit", githubError("Too Many Requests", 429), "rate-limited"],
+    [
+      "a primary rate limit reported as 403",
+      githubError("API rate limit exceeded", 403, {
+        "x-ratelimit-remaining": "0",
+      }),
+      "rate-limited",
+    ],
+    [
+      "an expired or revoked token",
+      githubError("Bad credentials", 401),
+      "permanent",
+    ],
+    [
+      "a token GitHub refuses for this endpoint",
+      githubError("Resource not accessible by integration", 403),
+      "permanent",
+    ],
+  ] as const)("classifies %s as %s", async (_case, failure, kind) => {
+    github.installations = [{ id: 10 }];
+    github.failInstallationId = 10;
+    github.failure = failure;
+
+    const result = await fetchUserRepositoryAccess("user-token");
+
+    expect(result).toEqual({
+      success: false,
+      error: { kind, message: expect.stringContaining(failure.message) },
     });
   });
 });
+
+function githubError(
+  message: string,
+  status: number,
+  headers: Record<string, string> = {},
+): Error {
+  return Object.assign(new Error(message), { status, response: { headers } });
+}

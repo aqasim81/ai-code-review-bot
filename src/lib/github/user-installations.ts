@@ -1,7 +1,8 @@
 import type { Octokit } from "@octokit/rest";
 import { describeError } from "@/lib/errors";
+import { classifyGitHubError } from "@/lib/github/github-errors";
 import { createOctokit } from "@/lib/github/octokit";
-import type { UserAccess } from "@/types/access";
+import type { UserAccess, UserAccessFetchError } from "@/types/access";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
@@ -43,13 +44,31 @@ async function listInstallationRepositories(
 }
 
 /**
+ * A 404 here means an installation was removed between listing the
+ * installations and its repositories; the next lookup no longer lists it.
+ * Anything without a known status (a server error, a network error or a
+ * timeout, which Octokit reports as 500) may pass on a retry.
+ */
+function classifyUserAccessError(error: unknown): UserAccessFetchError["kind"] {
+  switch (classifyGitHubError(error)) {
+    case "GITHUB_RATE_LIMITED":
+      return "rate-limited";
+    case "GITHUB_NOT_FOUND":
+    case "GITHUB_UNKNOWN_ERROR":
+      return "retryable";
+    default:
+      return "permanent";
+  }
+}
+
+/**
  * Lists the installations the user can see and, within each, the
  * repositories they can access and whether they can manage them. Any failed
  * request fails the whole lookup so access is never partially granted.
  */
 export async function fetchUserRepositoryAccess(
   accessToken: string,
-): Promise<Result<UserAccess, string>> {
+): Promise<Result<UserAccess, UserAccessFetchError>> {
   try {
     const octokit = createOctokit(accessToken);
     const installations = await octokit.paginate(
@@ -97,8 +116,9 @@ export async function fetchUserRepositoryAccess(
       truncated,
     });
   } catch (error) {
-    return err(
-      `Failed to fetch user repository access: ${describeError(error)}`,
-    );
+    return err({
+      kind: classifyUserAccessError(error),
+      message: `Failed to fetch user repository access: ${describeError(error)}`,
+    });
   }
 }
