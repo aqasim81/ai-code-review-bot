@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { STATUS_VARIANT } from "@/components/dashboard/review-constants";
 import { ReviewDetail } from "@/components/dashboard/review-detail";
@@ -8,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getReviewWithCommentsInScope } from "@/lib/db/queries";
 import type { ReviewId } from "@/types/branded";
+import { loadedDataOrLogFailures } from "../../loaded-data";
+import { isRecordId } from "../../record-id";
 
 interface ReviewDetailPageProps {
   params: Promise<{ id: string }>;
@@ -22,16 +25,32 @@ export default async function ReviewDetailPage({
     redirect("/");
   }
 
+  // A malformed id can't match a record: answer 404 without a query.
+  if (!isRecordId(id)) {
+    notFound();
+  }
+
   const reviewResult = await getReviewWithCommentsInScope(
     id as ReviewId,
     session.access,
   );
 
-  if (!reviewResult.success || !reviewResult.data) {
-    notFound();
+  const loaded = loadedDataOrLogFailures("review detail", {
+    review: reviewResult,
+  });
+  if (!loaded) {
+    return (
+      <div>
+        <PageHeader title="Review" />
+        <LoadFailedCard what="this review" />
+      </div>
+    );
   }
 
-  const review = reviewResult.data;
+  const { review } = loaded;
+  if (!review) {
+    notFound();
+  }
 
   const prUrl = `https://github.com/${review.repositoryFullName}/pull/${review.pullRequestNumber}`;
 

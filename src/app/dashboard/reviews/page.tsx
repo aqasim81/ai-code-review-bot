@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { NoInstallationsCard } from "@/components/dashboard/no-installations-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ReviewFilters } from "@/components/dashboard/review-filters";
@@ -17,6 +18,8 @@ import {
   listReviewsInScope,
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
+import { loadedDataOrLogFailures } from "../loaded-data";
+import { isRecordId } from "../record-id";
 
 interface ReviewsPageProps {
   searchParams: Promise<{
@@ -42,17 +45,36 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
     listRepositoriesInScope(session.access),
     listReviewsInScope({
       scope: session.access,
-      repositoryId: params.repo ? (params.repo as RepositoryId) : undefined,
+      // A malformed repo or cursor can't match a record; ignore it like an
+      // unknown status rather than sending it to the database.
+      repositoryId: isRecordId(params.repo)
+        ? (params.repo as RepositoryId)
+        : undefined,
       status:
         params.status && VALID_STATUSES.has(params.status)
           ? (params.status as ReviewStatus)
           : undefined,
-      cursor: params.cursor,
+      cursor: isRecordId(params.cursor) ? params.cursor : undefined,
       limit: 20,
     }),
   ]);
 
-  if (!installationsResult.success || installationsResult.data.length === 0) {
+  const loaded = loadedDataOrLogFailures("reviews", {
+    installations: installationsResult,
+    repos: reposResult,
+    reviews: reviewsResult,
+  });
+  if (!loaded) {
+    return (
+      <div>
+        <PageHeader title="Reviews" />
+        <LoadFailedCard what="your reviews" />
+      </div>
+    );
+  }
+  const { installations, repos, reviews: reviewData } = loaded;
+
+  if (installations.length === 0) {
     return (
       <div>
         <PageHeader title="Reviews" />
@@ -60,11 +82,6 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
       </div>
     );
   }
-
-  const repos = reposResult.success ? reposResult.data : [];
-  const reviewData = reviewsResult.success
-    ? reviewsResult.data
-    : { reviews: [], nextCursor: null };
 
   return (
     <div>

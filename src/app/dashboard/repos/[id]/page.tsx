@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/dashboard/settings-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +8,8 @@ import { findAccessibleRepositoryById } from "@/lib/db/queries";
 import { canManageRepository } from "@/lib/github/repository-access";
 import type { RepositoryId } from "@/types/branded";
 import { mergeWithDefaults } from "@/types/settings";
+import { loadedDataOrLogFailures } from "../../loaded-data";
+import { isRecordId } from "../../record-id";
 
 interface RepoSettingsPageProps {
   params: Promise<{ id: string }>;
@@ -21,16 +24,32 @@ export default async function RepoSettingsPage({
     redirect("/");
   }
 
+  // A malformed id can't match a record: answer 404 without a query.
+  if (!isRecordId(id)) {
+    notFound();
+  }
+
   const repoResult = await findAccessibleRepositoryById(
     id as RepositoryId,
     session.access,
   );
 
-  if (!repoResult.success || !repoResult.data) {
-    notFound();
+  const loaded = loadedDataOrLogFailures("repository settings", {
+    repo: repoResult,
+  });
+  if (!loaded) {
+    return (
+      <div>
+        <PageHeader title="Repository" />
+        <LoadFailedCard what="this repository" />
+      </div>
+    );
   }
 
-  const repo = repoResult.data;
+  const { repo } = loaded;
+  if (!repo) {
+    notFound();
+  }
 
   const settings = mergeWithDefaults(repo.settings);
 

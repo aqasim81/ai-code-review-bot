@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ReviewStats } from "@/components/dashboard/review-stats";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
   listRepositoriesInScope,
 } from "@/lib/db/queries";
 import { env } from "@/lib/env";
+import { loadedDataOrLogFailures } from "./loaded-data";
 
 export default async function DashboardPage() {
   const session = await getSession();
@@ -26,7 +28,22 @@ export default async function DashboardPage() {
     listRepositoriesInScope(session.access),
   ]);
 
-  if (!installationsResult.success || installationsResult.data.length === 0) {
+  const loaded = loadedDataOrLogFailures("dashboard", {
+    installations: installationsResult,
+    stats: statsResult,
+    repos: reposResult,
+  });
+  if (!loaded) {
+    return (
+      <div>
+        <PageHeader title="Dashboard" />
+        <LoadFailedCard what="the dashboard" />
+      </div>
+    );
+  }
+  const { installations, stats, repos } = loaded;
+
+  if (installations.length === 0) {
     return (
       <div>
         <PageHeader
@@ -57,12 +74,9 @@ export default async function DashboardPage() {
     );
   }
 
-  const accountLogins = installationsResult.data
+  const accountLogins = installations
     .map((installation) => installation.githubAccountLogin)
     .join(", ");
-
-  const stats = statsResult.success ? statsResult.data : null;
-  const repos = reposResult.success ? reposResult.data : [];
 
   return (
     <div>
@@ -71,7 +85,7 @@ export default async function DashboardPage() {
         description={`Overview for ${accountLogins}`}
       />
 
-      {stats && <ReviewStats {...stats} />}
+      <ReviewStats {...stats} />
 
       <div className="mt-8 grid gap-6 md:grid-cols-2">
         <Card>
