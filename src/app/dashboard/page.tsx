@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/auth";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ReviewStats } from "@/components/dashboard/review-stats";
 import { Button } from "@/components/ui/button";
@@ -13,14 +13,18 @@ import {
 import { env } from "@/lib/env";
 
 export default async function DashboardPage() {
-  const session = await auth();
+  const session = await getSession();
   if (!session) {
     redirect("/");
   }
 
-  const installationsResult = await findInstallationsByGitHubIds(
-    session.access.githubInstallationIds,
-  );
+  // The data queries are scoped to the session's access, so starting them
+  // before knowing whether there are installations costs nothing extra.
+  const [installationsResult, statsResult, reposResult] = await Promise.all([
+    findInstallationsByGitHubIds(session.access.githubInstallationIds),
+    getReviewStatsInScope(session.access),
+    listRepositoriesInScope(session.access),
+  ]);
 
   if (!installationsResult.success || installationsResult.data.length === 0) {
     return (
@@ -53,10 +57,6 @@ export default async function DashboardPage() {
     );
   }
 
-  const [statsResult, reposResult] = await Promise.all([
-    getReviewStatsInScope(session.access),
-    listRepositoriesInScope(session.access),
-  ]);
   const accountLogins = installationsResult.data
     .map((installation) => installation.githubAccountLogin)
     .join(", ");
@@ -71,14 +71,7 @@ export default async function DashboardPage() {
         description={`Overview for ${accountLogins}`}
       />
 
-      {stats && (
-        <ReviewStats
-          totalReviews={stats.totalReviews}
-          totalIssuesFound={stats.totalIssuesFound}
-          recentReviewCount={stats.recentReviewCount}
-          categoryBreakdown={stats.categoryBreakdown}
-        />
-      )}
+      {stats && <ReviewStats {...stats} />}
 
       <div className="mt-8 grid gap-6 md:grid-cols-2">
         <Card>

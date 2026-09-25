@@ -85,26 +85,13 @@ function parseFileDiff(block: string): ParsedDiffFile | null {
       line.startsWith("Binary files") || line.includes("GIT binary patch"),
   );
 
-  if (isBinary) {
-    return {
-      filePath,
-      previousFilePath: extractPreviousFilePath(lines),
-      changeType: detectFileChangeType(lines),
-      language: detectLanguageFromFilePath(filePath),
-      hunks: [],
-      isBinary: true,
-    };
-  }
-
-  const hunks = parseHunks(lines);
-
   return {
     filePath,
     previousFilePath: extractPreviousFilePath(lines),
     changeType: detectFileChangeType(lines),
     language: detectLanguageFromFilePath(filePath),
-    hunks,
-    isBinary: false,
+    hunks: isBinary ? [] : parseHunks(lines),
+    isBinary,
   };
 }
 
@@ -197,37 +184,30 @@ function isReviewableFile(filePath: string): boolean {
 function parseHunks(lines: string[]): DiffHunk[] {
   const hunks: DiffHunk[] = [];
   let currentHunkLines: string[] = [];
-  let currentHeader: string | null = null;
   let currentMatch: RegExpExecArray | null = null;
 
   for (const line of lines) {
     const hunkMatch = HUNK_HEADER_REGEX.exec(line);
     if (hunkMatch !== null) {
-      if (currentHeader !== null && currentMatch !== null) {
-        hunks.push(
-          buildDiffHunk(currentHeader, currentMatch, currentHunkLines),
-        );
+      if (currentMatch !== null) {
+        hunks.push(buildDiffHunk(currentMatch, currentHunkLines));
       }
-      currentHeader = line;
       currentMatch = hunkMatch;
       currentHunkLines = [];
-    } else if (currentHeader !== null) {
+    } else if (currentMatch !== null) {
       currentHunkLines.push(line);
     }
   }
 
-  if (currentHeader !== null && currentMatch !== null) {
-    hunks.push(buildDiffHunk(currentHeader, currentMatch, currentHunkLines));
+  if (currentMatch !== null) {
+    hunks.push(buildDiffHunk(currentMatch, currentHunkLines));
   }
 
   return hunks;
 }
 
-function buildDiffHunk(
-  header: string,
-  match: RegExpExecArray,
-  rawLines: string[],
-): DiffHunk {
+// The header regex is anchored to the whole line, so match[0] is the header.
+function buildDiffHunk(match: RegExpExecArray, rawLines: string[]): DiffHunk {
   const oldStart = Number.parseInt(match[1] ?? "1", 10);
   const oldCount = Number.parseInt(match[2] ?? "1", 10);
   const newStart = Number.parseInt(match[3] ?? "1", 10);
@@ -238,7 +218,7 @@ function buildDiffHunk(
     oldCount,
     newStart,
     newCount,
-    header,
+    header: match[0],
     lines: parseDiffLines(rawLines, oldStart, newStart),
   };
 }
@@ -278,10 +258,8 @@ function parseDiffLines(
       });
       oldLine++;
       newLine++;
-    } else if (raw === "\\ No newline at end of file") {
-      // Skip this marker — it's metadata, not a code line
     }
-    // Ignore other lines (empty trailing lines, etc.)
+    // Ignore other lines ("\\ No newline at end of file", empty trailing lines)
   }
 
   return parsed;

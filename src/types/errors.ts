@@ -5,8 +5,6 @@ export type AstParseError =
   | "AST_LANGUAGE_NOT_SUPPORTED"
   | "AST_PARSE_FAILED";
 
-export type ContextBuildError = "CONTEXT_NO_REVIEWABLE_FILES";
-
 export type GitHubError =
   | "GITHUB_AUTH_FAILED"
   | "GITHUB_RATE_LIMITED"

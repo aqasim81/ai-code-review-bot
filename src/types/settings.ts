@@ -1,8 +1,5 @@
 import { z } from "zod";
-import type {
-  CommentCategory,
-  CommentSeverity,
-} from "@/generated/prisma/enums";
+import { CommentCategory, CommentSeverity } from "@/generated/prisma/enums";
 
 /**
  * Per-repository configuration stored in Repository.settings JSON column.
@@ -16,13 +13,7 @@ export interface RepositorySettings {
 }
 
 const DEFAULT_REPOSITORY_SETTINGS: Required<RepositorySettings> = {
-  enabledCategories: [
-    "SECURITY",
-    "BUGS",
-    "PERFORMANCE",
-    "STYLE",
-    "BEST_PRACTICES",
-  ],
+  enabledCategories: Object.values(CommentCategory),
   minimumSeverity: "SUGGESTION",
   excludePatterns: [],
   customInstructions: "",
@@ -38,11 +29,9 @@ const settingsTextSchema = z
 
 export const repositorySettingsSchema = z.object({
   enabledCategories: z
-    .array(
-      z.enum(["SECURITY", "BUGS", "PERFORMANCE", "STYLE", "BEST_PRACTICES"]),
-    )
+    .array(z.enum(CommentCategory))
     .min(1, "At least one category must be enabled"),
-  minimumSeverity: z.enum(["CRITICAL", "WARNING", "SUGGESTION", "NITPICK"]),
+  minimumSeverity: z.enum(CommentSeverity),
   excludePatterns: z.array(settingsTextSchema.max(200)).max(20),
   customInstructions: settingsTextSchema.max(2000),
 });

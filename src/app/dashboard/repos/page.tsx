@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/auth";
+import { NoInstallationsCard } from "@/components/dashboard/no-installations-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RepositoryList } from "@/components/dashboard/repository-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,7 @@ import {
 import { canManageRepository } from "@/lib/github/repository-access";
 
 export default async function RepositoriesPage() {
-  const session = await auth();
+  const session = await getSession();
   if (!session) {
     redirect("/");
   }
@@ -50,13 +51,7 @@ export default async function RepositoriesPage() {
       />
 
       {installationsWithRepos.length === 0 ? (
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">
-              No installations found. Install the GitHub App to get started.
-            </p>
-          </CardContent>
-        </Card>
+        <NoInstallationsCard />
       ) : (
         <div className="space-y-6">
           {installationsWithRepos.map(({ installation, repositories }) => (

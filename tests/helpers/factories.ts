@@ -149,7 +149,6 @@ export function createFileReviewContext(
     changeType: "modified",
     enrichedHunks: [createEnrichedHunk()],
     imports: [createAstImport()],
-    fullFileContent: 'const x = "hello";\n',
     ...overrides,
   };
 }

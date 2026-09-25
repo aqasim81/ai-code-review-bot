@@ -10,7 +10,7 @@ import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type { ReviewFinding } from "@/types/review";
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
+export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 
 const VALID_CATEGORIES: ReadonlySet<string> = new Set(
   Object.values(CommentCategoryValues),
@@ -192,8 +192,8 @@ function validateFinding(raw: unknown): ReviewFinding | null {
       ? obj.confidence
       : null;
 
-  const category = mapCategoryToEnum(obj.category);
-  const severity = mapSeverityToEnum(obj.severity);
+  const category = toEnumValue<CommentCategory>(obj.category, VALID_CATEGORIES);
+  const severity = toEnumValue<CommentSeverity>(obj.severity, VALID_SEVERITIES);
 
   if (
     filePath === null ||
@@ -218,24 +218,12 @@ function validateFinding(raw: unknown): ReviewFinding | null {
   };
 }
 
-function mapCategoryToEnum(value: unknown): CommentCategory | null {
-  if (typeof value !== "string") {
-    return null;
-  }
+/** The upper-cased value when it is one of `allowed`, otherwise null. */
+function toEnumValue<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+): T | null {
+  if (typeof value !== "string") return null;
   const upper = value.toUpperCase();
-  if (VALID_CATEGORIES.has(upper)) {
-    return upper as CommentCategory;
-  }
-  return null;
-}
-
-function mapSeverityToEnum(value: unknown): CommentSeverity | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const upper = value.toUpperCase();
-  if (VALID_SEVERITIES.has(upper)) {
-    return upper as CommentSeverity;
-  }
-  return null;
+  return allowed.has(upper) ? (upper as T) : null;
 }

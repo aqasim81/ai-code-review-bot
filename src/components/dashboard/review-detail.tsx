@@ -5,28 +5,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type {
-  CommentCategory,
-  CommentSeverity,
-} from "@/generated/prisma/enums";
+import type { ReviewDetailResult } from "@/lib/db/queries";
 
-interface ReviewComment {
-  readonly id: string;
-  readonly filePath: string;
-  readonly lineNumber: number;
-  readonly category: CommentCategory;
-  readonly severity: CommentSeverity;
-  readonly message: string;
-  readonly suggestion: string | null;
-  readonly confidence: number;
-}
+type ReviewComment = ReviewDetailResult["comments"][number];
 
-interface ReviewDetailProps {
-  readonly summary: string | null;
-  readonly issuesFound: number;
-  readonly processingTimeMs: number | null;
-  readonly comments: readonly ReviewComment[];
-}
+type ReviewDetailProps = Pick<
+  ReviewDetailResult,
+  "summary" | "issuesFound" | "processingTimeMs" | "comments"
+>;
 
 export function ReviewDetail({
   summary,

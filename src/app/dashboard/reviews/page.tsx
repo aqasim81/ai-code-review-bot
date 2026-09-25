@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/auth";
+import { NoInstallationsCard } from "@/components/dashboard/no-installations-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ReviewFilters } from "@/components/dashboard/review-filters";
 import { ReviewList } from "@/components/dashboard/review-list";
@@ -29,31 +30,15 @@ const VALID_STATUSES = new Set<string>(Object.values(ReviewStatusValues));
 
 export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
   const params = await searchParams;
-  const session = await auth();
+  const session = await getSession();
   if (!session) {
     redirect("/");
   }
 
-  const installationsResult = await findInstallationsByGitHubIds(
-    session.access.githubInstallationIds,
-  );
-
-  if (!installationsResult.success || installationsResult.data.length === 0) {
-    return (
-      <div>
-        <PageHeader title="Reviews" />
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">
-              No installations found. Install the GitHub App to get started.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const [reposResult, reviewsResult] = await Promise.all([
+  // The data queries are scoped to the session's access, so starting them
+  // before knowing whether there are installations costs nothing extra.
+  const [installationsResult, reposResult, reviewsResult] = await Promise.all([
+    findInstallationsByGitHubIds(session.access.githubInstallationIds),
     listRepositoriesInScope(session.access),
     listReviewsInScope({
       scope: session.access,
@@ -66,6 +51,15 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
       limit: 20,
     }),
   ]);
+
+  if (!installationsResult.success || installationsResult.data.length === 0) {
+    return (
+      <div>
+        <PageHeader title="Reviews" />
+        <NoInstallationsCard />
+      </div>
+    );
+  }
 
   const repos = reposResult.success ? reposResult.data : [];
   const reviewData = reviewsResult.success

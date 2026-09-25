@@ -14,9 +14,10 @@ import type {
 
 const require = createRequire(import.meta.url);
 
-let initialized = false;
-let parserInstance: Parser | null = null;
-const loadedLanguages = new Map<string, Language>();
+// Promises, not results, are cached so concurrent jobs share one load. A
+// failed load is dropped from the cache so the next call tries again.
+let parserPromise: Promise<Result<Parser, AstParseError>> | null = null;
+const languagePromises = new Map<SupportedLanguage, Promise<Language | null>>();
 
 const GRAMMAR_PACKAGE_MAP: Record<
   SupportedLanguage,
@@ -86,13 +87,7 @@ const IMPORT_NODE_TYPES: Record<SupportedLanguage, string[]> = {
   java: ["import_declaration"],
 };
 
-export async function initializeAstParser(): Promise<
-  Result<void, AstParseError>
-> {
-  if (initialized) {
-    return ok(undefined);
-  }
-
+async function createParser(): Promise<Result<Parser, AstParseError>> {
   try {
     await Parser.init({
       locateFile(scriptName: string) {
@@ -104,12 +99,28 @@ export async function initializeAstParser(): Promise<
         );
       },
     });
-    parserInstance = new Parser();
-    initialized = true;
-    return ok(undefined);
+    return ok(new Parser());
   } catch {
     return err("AST_INIT_FAILED");
   }
+}
+
+function getParser(): Promise<Result<Parser, AstParseError>> {
+  if (parserPromise === null) {
+    const created = createParser();
+    parserPromise = created;
+    created.then((result) => {
+      if (!result.success && parserPromise === created) parserPromise = null;
+    });
+  }
+  return parserPromise;
+}
+
+export async function initializeAstParser(): Promise<
+  Result<void, AstParseError>
+> {
+  const parserResult = await getParser();
+  return parserResult.success ? ok(undefined) : parserResult;
 }
 
 export async function parseFileAst(
@@ -117,16 +128,9 @@ export async function parseFileAst(
   language: SupportedLanguage,
   filePath: string,
 ): Promise<Result<AstFileContext, AstParseError>> {
-  if (!initialized || parserInstance === null) {
-    const initResult = await initializeAstParser();
-    if (!initResult.success) {
-      return initResult;
-    }
-  }
-
-  if (parserInstance === null) {
-    return err("AST_INIT_FAILED");
-  }
+  const parserResult = await getParser();
+  if (!parserResult.success) return parserResult;
+  const parser = parserResult.data;
 
   const languageObj = await loadLanguageGrammar(language);
   if (languageObj === null) {
@@ -135,8 +139,8 @@ export async function parseFileAst(
 
   let tree: ReturnType<Parser["parse"]> = null;
   try {
-    parserInstance.setLanguage(languageObj);
-    tree = parserInstance.parse(fileContent);
+    parser.setLanguage(languageObj);
+    tree = parser.parse(fileContent);
 
     if (tree === null) {
       return err("AST_PARSE_FAILED");
@@ -154,29 +158,33 @@ export async function parseFileAst(
   }
 }
 
-async function loadLanguageGrammar(
+async function readLanguageGrammar(
   language: SupportedLanguage,
 ): Promise<Language | null> {
   const grammarInfo = GRAMMAR_PACKAGE_MAP[language];
-  const cacheKey = grammarInfo.wasmFile;
-
-  const cached = loadedLanguages.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   try {
     const packageJsonPath = require.resolve(
       `${grammarInfo.packageName}/package.json`,
     );
     const packageDir = path.dirname(packageJsonPath);
-    const grammarPath = path.join(packageDir, grammarInfo.wasmFile);
-    const lang = await Language.load(grammarPath);
-    loadedLanguages.set(cacheKey, lang);
-    return lang;
+    return await Language.load(path.join(packageDir, grammarInfo.wasmFile));
   } catch {
     return null;
   }
+}
+
+function loadLanguageGrammar(
+  language: SupportedLanguage,
+): Promise<Language | null> {
+  const cached = languagePromises.get(language);
+  if (cached !== undefined) return cached;
+
+  const loading = readLanguageGrammar(language);
+  languagePromises.set(language, loading);
+  loading.then((lang) => {
+    if (lang === null) languagePromises.delete(language);
+  });
+  return loading;
 }
 
 function extractScopes(

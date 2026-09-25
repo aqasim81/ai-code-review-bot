@@ -1,4 +1,5 @@
 import { type Job, Queue } from "bullmq";
+import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
@@ -62,17 +63,26 @@ async function findLiveJobWithSameId(
   return null;
 }
 
+/** The fields every log line about a review job carries. */
+export function reviewJobLogContext(
+  jobId: string | undefined,
+  jobData: ReviewJobData,
+): Record<string, unknown> {
+  return {
+    jobId,
+    type: jobData.type,
+    repository: jobData.payload.repositoryFullName,
+    pullRequest: jobData.payload.pullRequestNumber,
+  };
+}
+
 async function enqueueJob(
   jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
-  const { payload } = jobData;
   const jobId = buildDeterministicJobId(jobData);
   const logContext = {
-    jobId,
-    type: jobData.type,
-    repository: payload.repositoryFullName,
-    pullRequest: payload.pullRequestNumber,
-    commitSha: payload.commitSha,
+    ...reviewJobLogContext(jobId, jobData),
+    commitSha: jobData.payload.commitSha,
   };
 
   try {
@@ -88,7 +98,7 @@ async function enqueueJob(
   } catch (error) {
     logger.error("Failed to enqueue review job", {
       ...logContext,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     return err("QUEUE_ENQUEUE_FAILED");
   }

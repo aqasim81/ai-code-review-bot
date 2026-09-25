@@ -27,11 +27,12 @@ const CATEGORY_LABELS: Record<CommentCategory, string> = {
   BEST_PRACTICES: "Best Practices",
 };
 
-function formatCommentBody(finding: ReviewFinding): string {
-  const badge = SEVERITY_BADGES[finding.severity] ?? finding.severity;
-  const category = CATEGORY_LABELS[finding.category] ?? finding.category;
+function formatFindingHeading(finding: ReviewFinding): string {
+  return `${SEVERITY_BADGES[finding.severity]} | ${CATEGORY_LABELS[finding.category]}`;
+}
 
-  let body = `${badge} | ${category}\n\n${finding.message}`;
+function formatCommentBody(finding: ReviewFinding): string {
+  let body = `${formatFindingHeading(finding)}\n\n${finding.message}`;
 
   if (finding.suggestion) {
     body += `\n\n**Suggestion:** ${finding.suggestion}`;
@@ -49,33 +50,30 @@ function findFileInDiff(
   );
 }
 
-type LineMatch = {
-  line: DiffLine;
-  side: "LEFT" | "RIGHT";
-};
+type DiffSide = "LEFT" | "RIGHT";
 
 function findLineWhere(
   diffFile: ParsedDiffFile,
   matches: (line: DiffLine) => boolean,
-  side: "LEFT" | "RIGHT",
-): LineMatch | undefined {
-  for (const hunk of diffFile.hunks) {
-    const line = hunk.lines.find(matches);
-    if (line) return { line, side };
-  }
-  return undefined;
+  side: DiffSide,
+): DiffSide | undefined {
+  return diffFile.hunks.some((hunk) => hunk.lines.some(matches))
+    ? side
+    : undefined;
 }
 
 /**
- * Findings use new-file line numbers, so a line that exists in the new file
- * (added or context) wins anywhere in the file. A removed line is matched by
- * its old line number only when no new-file line has that number; otherwise a
- * finding on a changed line would land on the deleted code it replaced.
+ * The side of the diff the finding's line is on. Findings use new-file line
+ * numbers, so a line that exists in the new file (added or context) wins
+ * anywhere in the file. A removed line is matched by its old line number only
+ * when no new-file line has that number; otherwise a finding on a changed line
+ * would land on the deleted code it replaced. Either way the line number the
+ * comment is posted on is the finding's own.
  */
-function findLineInFile(
+function findSideOfLine(
   diffFile: ParsedDiffFile,
   lineNumber: number,
-): LineMatch | undefined {
+): DiffSide | undefined {
   return (
     findLineWhere(
       diffFile,
@@ -110,25 +108,20 @@ function mapSingleFinding(
     };
   }
 
-  const lineMatch = findLineInFile(diffFile, finding.lineNumber);
+  const side = findSideOfLine(diffFile, finding.lineNumber);
 
-  if (!lineMatch) {
+  if (!side) {
     return {
       finding,
       reason: `Line ${finding.lineNumber} in "${finding.filePath}" is not within the diff context`,
     };
   }
 
-  const lineNumber =
-    lineMatch.side === "LEFT"
-      ? (lineMatch.line.oldLineNumber ?? finding.lineNumber)
-      : (lineMatch.line.newLineNumber ?? finding.lineNumber);
-
   return {
     finding,
     path: diffFile.filePath,
-    line: lineNumber,
-    side: lineMatch.side,
+    line: finding.lineNumber,
+    side,
     formattedBody: formatCommentBody(finding),
   };
 }
@@ -143,10 +136,6 @@ export function mapFindingsToGitHubComments(
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
 ): CommentMappingResult {
-  if (findings.length === 0) {
-    return { mappedComments: [], unmappedFindings: [] };
-  }
-
   const results = findings.map((finding) =>
     mapSingleFinding(finding, parsedDiff),
   );
@@ -169,9 +158,7 @@ export function buildReviewSummary(
   if (unmappedFindings.length > 0) {
     summary += "\n\n---\n\n**Additional findings** (outside diff context):\n";
     for (const { finding } of unmappedFindings) {
-      const badge = SEVERITY_BADGES[finding.severity] ?? finding.severity;
-      const category = CATEGORY_LABELS[finding.category] ?? finding.category;
-      summary += `\n- ${badge} | ${category} — \`${finding.filePath}:${finding.lineNumber}\`: ${finding.message}`;
+      summary += `\n- ${formatFindingHeading(finding)} — \`${finding.filePath}:${finding.lineNumber}\`: ${finding.message}`;
     }
   }
 

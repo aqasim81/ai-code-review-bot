@@ -2,6 +2,7 @@
 
 import { useActionState, useRef, useState } from "react";
 import { saveRepositorySettingsAction } from "@/app/dashboard/actions";
+import { CATEGORY_LABELS } from "@/components/dashboard/review-constants";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -15,13 +16,10 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-const CATEGORIES = [
-  { value: "SECURITY", label: "Security" },
-  { value: "BUGS", label: "Bugs" },
-  { value: "PERFORMANCE", label: "Performance" },
-  { value: "STYLE", label: "Style" },
-  { value: "BEST_PRACTICES", label: "Best Practices" },
-] as const;
+const CATEGORIES = Object.entries(CATEGORY_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
 
 const SEVERITIES = [
   { value: "CRITICAL", label: "Critical only" },

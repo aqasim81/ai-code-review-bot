@@ -1,6 +1,3 @@
-import type { ContextBuildError } from "@/types/errors";
-import type { Result } from "@/types/results";
-import { err, ok } from "@/types/results";
 import type {
   AstFileContext,
   AstScope,
@@ -38,46 +35,38 @@ interface BuildReviewContextOptions {
   readonly maxTokensPerChunk?: number;
 }
 
+/** Chunks are empty when no file in the diff is reviewable. */
 export function buildReviewContext(
   parsedDiff: ParsedDiff,
   astContexts: ReadonlyMap<string, AstFileContext>,
-  fileContents: ReadonlyMap<string, string>,
   options?: BuildReviewContextOptions,
-): Result<ReviewContext, ContextBuildError> {
+): ReviewContext {
   const maxTokens = options?.maxTokensPerChunk ?? DEFAULT_MAX_TOKENS_PER_CHUNK;
 
-  const reviewableFiles = filterReviewableFiles(parsedDiff.files);
-  if (reviewableFiles.length === 0) {
-    return err("CONTEXT_NO_REVIEWABLE_FILES");
-  }
-
-  const fileContexts = reviewableFiles.map((file) =>
-    buildFileReviewContext(
-      file,
-      astContexts.get(file.filePath),
-      fileContents.get(file.filePath) ?? null,
-    ),
+  const files = filterReviewableFiles(parsedDiff.files).map((file) =>
+    measureFile(buildFileReviewContext(file, astContexts.get(file.filePath))),
   );
 
   // A file larger than a whole chunk cannot be sent in one request, and would
   // fail the review on every attempt; skip it and report it instead.
-  const fitting: FileReviewContext[] = [];
+  const fitting: MeasuredFile[] = [];
   const oversizedFilePaths: string[] = [];
-  for (const file of prioritizeFiles(fileContexts)) {
-    if (estimateFileTokenCount(file) > maxTokens) {
-      oversizedFilePaths.push(file.filePath);
+  for (const file of prioritizeFiles(files)) {
+    if (file.tokens > maxTokens) {
+      oversizedFilePaths.push(file.context.filePath);
     } else {
       fitting.push(file);
     }
   }
 
-  return ok({
+  return {
     chunks: chunkFileContexts(fitting, maxTokens),
     oversizedFilePaths,
-  });
+  };
 }
 
-function filterReviewableFiles(
+/** Files with changes to review: not binary, not deleted, with hunks. */
+export function filterReviewableFiles(
   files: readonly ParsedDiffFile[],
 ): ParsedDiffFile[] {
   return files.filter(
@@ -89,7 +78,6 @@ function filterReviewableFiles(
 function buildFileReviewContext(
   file: ParsedDiffFile,
   astContext: AstFileContext | undefined,
-  fileContent: string | null,
 ): FileReviewContext {
   const scopes = astContext?.scopes ?? [];
   const imports = astContext?.imports ?? [];
@@ -105,7 +93,6 @@ function buildFileReviewContext(
     changeType: file.changeType,
     enrichedHunks,
     imports,
-    fullFileContent: fileContent,
   };
 }
 
@@ -137,14 +124,29 @@ function countChangedLines(context: FileReviewContext): number {
   return count;
 }
 
-function prioritizeFiles(files: FileReviewContext[]): FileReviewContext[] {
+/** A file context with the values sorting and chunking need, computed once. */
+interface MeasuredFile {
+  readonly context: FileReviewContext;
+  readonly securitySensitive: boolean;
+  readonly changedLines: number;
+  readonly tokens: number;
+}
+
+function measureFile(context: FileReviewContext): MeasuredFile {
+  return {
+    context,
+    securitySensitive: isSecuritySensitiveFile(context.filePath),
+    changedLines: countChangedLines(context),
+    tokens: estimateFileTokenCount(context),
+  };
+}
+
+function prioritizeFiles(files: readonly MeasuredFile[]): MeasuredFile[] {
   return [...files].sort((a, b) => {
-    const aSecure = isSecuritySensitiveFile(a.filePath) ? 0 : 1;
-    const bSecure = isSecuritySensitiveFile(b.filePath) ? 0 : 1;
-    if (aSecure !== bSecure) {
-      return aSecure - bSecure;
+    if (a.securitySensitive !== b.securitySensitive) {
+      return a.securitySensitive ? -1 : 1;
     }
-    return countChangedLines(b) - countChangedLines(a);
+    return b.changedLines - a.changedLines;
   });
 }
 
@@ -170,16 +172,14 @@ function estimateFileTokenCount(context: FileReviewContext): number {
 }
 
 function chunkFileContexts(
-  files: FileReviewContext[],
+  files: readonly MeasuredFile[],
   maxTokensPerChunk: number,
 ): ReviewChunk[] {
   const chunks: ReviewChunk[] = [];
   let currentFiles: FileReviewContext[] = [];
   let currentTokenCount = 0;
 
-  for (const file of files) {
-    const fileTokens = estimateFileTokenCount(file);
-
+  for (const { context: file, tokens: fileTokens } of files) {
     if (
       currentFiles.length > 0 &&
       currentTokenCount + fileTokens > maxTokensPerChunk

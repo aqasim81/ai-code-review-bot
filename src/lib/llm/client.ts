@@ -1,11 +1,13 @@
 import LlmSdk from "@anthropic-ai/sdk";
 import { env } from "@/lib/env";
 import {
+  DEFAULT_CONFIDENCE_THRESHOLD,
   parseLlmReviewResponse,
   parseTruncatedLlmReviewResponse,
 } from "@/lib/llm/parser";
 import { buildReviewPrompt } from "@/lib/llm/prompts";
 import { logger } from "@/lib/logger";
+import { exponentialDelayMs, sleep } from "@/lib/retry";
 import type { LLMError, LLMService } from "@/types/llm";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
@@ -13,7 +15,6 @@ import type { ReviewChunk, ReviewResult } from "@/types/review";
 
 const DEFAULT_MODEL_ID = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const BASE_RETRY_DELAY_MS = 1000;
 
@@ -109,7 +110,7 @@ async function callWithRetry(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
-      const delayMs = BASE_RETRY_DELAY_MS * 3 ** (attempt - 1);
+      const delayMs = exponentialDelayMs(BASE_RETRY_DELAY_MS, 3, attempt);
       logger.info("Retrying LLM call", { attempt, delayMs });
       await sleep(delayMs);
     }
@@ -217,10 +218,4 @@ function isRetryableError(error: LLMError): boolean {
     error === "LLM_TIMEOUT" ||
     error === "LLM_UNKNOWN_ERROR"
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

@@ -46,8 +46,6 @@ const installationDeletedPayloadSchema = z.object({
   installation: z.object({ id: z.number().int() }),
 });
 
-const installationSuspensionPayloadSchema = installationDeletedPayloadSchema;
-
 const installationRepositoriesPayloadSchema = z.object({
   action: z.enum(["added", "removed"]),
   installation: z.object({
@@ -99,19 +97,21 @@ function parseWebhookPayloadShape<T>(
 function selectWellFormedRepositories(
   repositories: readonly { id: number; full_name: string }[],
   githubInstallationId: number,
-): { id: number; full_name: string }[] {
-  return repositories.filter((repo) => {
-    const wellFormed = repositoryFullNameSchema.safeParse(
-      repo.full_name,
-    ).success;
-    if (!wellFormed) {
-      logger.warn("Skipping repository with a malformed name", {
-        githubInstallationId,
-        githubRepoId: repo.id,
-      });
-    }
-    return wellFormed;
-  });
+): { githubRepoId: number; fullName: string }[] {
+  return repositories
+    .filter((repo) => {
+      const wellFormed = repositoryFullNameSchema.safeParse(
+        repo.full_name,
+      ).success;
+      if (!wellFormed) {
+        logger.warn("Skipping repository with a malformed name", {
+          githubInstallationId,
+          githubRepoId: repo.id,
+        });
+      }
+      return wellFormed;
+    })
+    .map((repo) => ({ githubRepoId: repo.id, fullName: repo.full_name }));
 }
 
 /**
@@ -120,21 +120,17 @@ function selectWellFormedRepositories(
  */
 function describeInstallationAccount(
   account: z.infer<typeof installationAccountSchema>,
-): { accountLogin: string; accountType: AccountType } {
+): { githubAccountLogin: string; githubAccountType: AccountType } {
   if (!("login" in account)) {
-    return { accountLogin: account.slug, accountType: "ENTERPRISE" };
+    return {
+      githubAccountLogin: account.slug,
+      githubAccountType: "ENTERPRISE",
+    };
   }
   return {
-    accountLogin: account.login,
-    accountType: account.type === "Organization" ? "ORG" : "USER",
+    githubAccountLogin: account.login,
+    githubAccountType: account.type === "Organization" ? "ORG" : "USER",
   };
-}
-
-function toInstallationAccountFields(
-  account: z.infer<typeof installationAccountSchema>,
-): { githubAccountLogin: string; githubAccountType: AccountType } {
-  const { accountLogin, accountType } = describeInstallationAccount(account);
-  return { githubAccountLogin: accountLogin, githubAccountType: accountType };
 }
 
 export async function handleInstallationCreated(
@@ -149,12 +145,12 @@ export async function handleInstallationCreated(
   const { installation, sender } = parsed.data;
   const account = installation.account;
 
-  const { accountLogin, accountType } = describeInstallationAccount(account);
+  const accountFields = describeInstallationAccount(account);
 
   logger.info("Processing installation.created event", {
     githubInstallationId: installation.id,
-    account: accountLogin,
-    accountType,
+    account: accountFields.githubAccountLogin,
+    accountType: accountFields.githubAccountType,
     sender: sender.login,
   });
 
@@ -163,15 +159,8 @@ export async function handleInstallationCreated(
     installation.id,
   );
   const result = await createInstallationWithRepositories(
-    {
-      githubInstallationId: installation.id,
-      githubAccountLogin: accountLogin,
-      githubAccountType: accountType,
-    },
-    repositories.map((repo) => ({
-      githubRepoId: repo.id,
-      fullName: repo.full_name,
-    })),
+    { githubInstallationId: installation.id, ...accountFields },
+    repositories,
   );
 
   if (!result.success) {
@@ -243,15 +232,12 @@ export async function handleInstallationRepositoriesChanged(
       ? await addRepositoriesToInstallation(
           {
             githubInstallationId: installation.id,
-            ...toInstallationAccountFields(installation.account),
+            ...describeInstallationAccount(installation.account),
           },
           selectWellFormedRepositories(
             parsed.data.repositories_added,
             installation.id,
-          ).map((repo) => ({
-            githubRepoId: repo.id,
-            fullName: repo.full_name,
-          })),
+          ),
         )
       : await removeRepositoriesFromInstallation(
           installation.id,
@@ -280,7 +266,7 @@ export async function handleInstallationSuspension(
   suspended: boolean,
 ): Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>> {
   const parsed = parseWebhookPayloadShape(
-    installationSuspensionPayloadSchema,
+    installationDeletedPayloadSchema,
     payload,
     suspended ? "installation.suspend" : "installation.unsuspend",
   );
@@ -342,27 +328,9 @@ export async function handlePullRequestEvent(
 
   // A push is reviewed against the last reviewed commit, which the worker
   // looks up; the push's own "before" commit may never have been reviewed.
-  if (payload.action === "synchronize") {
-    const result = await enqueueDeltaReviewJob({
-      installationId,
-      githubRepoId: payload.repository.id,
-      repositoryFullName: payload.repository.full_name,
-      pullRequestNumber: payload.pull_request.number,
-      commitSha: payload.pull_request.head.sha,
-    });
-
-    if (!result.success) {
-      logger.error("Failed to enqueue delta review job", {
-        error: result.error,
-        repository: payload.repository.full_name,
-      });
-      return err("REVIEW_ENQUEUE_FAILED");
-    }
-
-    return ok({ acknowledged: true, jobId: result.data.jobId });
-  }
-
-  const result = await enqueueReviewJob({
+  const isPush = payload.action === "synchronize";
+  const enqueue = isPush ? enqueueDeltaReviewJob : enqueueReviewJob;
+  const result = await enqueue({
     installationId,
     githubRepoId: payload.repository.id,
     repositoryFullName: payload.repository.full_name,
@@ -371,10 +339,15 @@ export async function handlePullRequestEvent(
   });
 
   if (!result.success) {
-    logger.error("Failed to enqueue review job", {
-      error: result.error,
-      repository: payload.repository.full_name,
-    });
+    logger.error(
+      isPush
+        ? "Failed to enqueue delta review job"
+        : "Failed to enqueue review job",
+      {
+        error: result.error,
+        repository: payload.repository.full_name,
+      },
+    );
     return err("REVIEW_ENQUEUE_FAILED");
   }
 

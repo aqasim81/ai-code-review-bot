@@ -1,6 +1,7 @@
 import type { FetchedAccess } from "@/lib/github/access-refresh";
 import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
 import type { Result } from "@/types/results";
+import { ok } from "@/types/results";
 
 // A regular refresh reuses a result for 30 s: one dashboard request runs the
 // session callback in middleware, the layout and the page. A forced refresh
@@ -34,7 +35,7 @@ async function fetchAndStamp(
 ): Promise<Result<FetchedAccess, string>> {
   const result = await fetchUserRepositoryAccess(accessToken);
   if (!result.success) return result;
-  return { success: true, data: { access: result.data, fetchedAt } };
+  return ok({ access: result.data, fetchedAt });
 }
 
 export async function fetchUserRepositoryAccessShared(
