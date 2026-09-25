@@ -1,7 +1,8 @@
 import { createSign } from "node:crypto";
-import { Octokit } from "@octokit/rest";
+import type { Octokit } from "@octokit/rest";
 import { env } from "@/lib/env";
 import { describeError } from "@/lib/errors";
+import { createOctokit } from "@/lib/github/octokit";
 import { selectReviewWithMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
 import { sleep } from "@/lib/retry";
@@ -48,7 +49,7 @@ async function getAppBotLogin(
 ): Promise<Result<string, GitHubError>> {
   if (cachedAppBotLogin !== null) return ok(cachedAppBotLogin);
   try {
-    const appOctokit = new Octokit({ auth: createGitHubAppJwt(credentials) });
+    const appOctokit = createOctokit(createGitHubAppJwt(credentials));
     const { data } = await appOctokit.apps.getAuthenticated();
     if (!data?.slug) return err("GITHUB_UNKNOWN_ERROR");
     cachedAppBotLogin = `${data.slug}[bot]`;
@@ -67,7 +68,7 @@ async function createInstallationAccessToken(
 ): Promise<Result<string, GitHubError>> {
   try {
     const jwt = createGitHubAppJwt(credentials);
-    const appOctokit = new Octokit({ auth: jwt });
+    const appOctokit = createOctokit(jwt);
 
     const response = await appOctokit.apps.createInstallationAccessToken({
       installation_id: installationId,
@@ -195,17 +196,18 @@ function createGitHubService(
   }
 
   async function getOctokit(): Promise<Result<Octokit, GitHubError>> {
-    if (isTokenExpired()) {
-      clearToken();
-      const tokenResult = await createInstallationAccessToken(
-        credentials,
-        installationId,
-      );
-      if (!tokenResult.success) return tokenResult;
-      cachedToken = tokenResult.data;
-      tokenCreatedAt = Date.now();
+    if (cachedToken !== null && !isTokenExpired()) {
+      return ok(createOctokit(cachedToken));
     }
-    return ok(new Octokit({ auth: cachedToken }));
+    clearToken();
+    const tokenResult = await createInstallationAccessToken(
+      credentials,
+      installationId,
+    );
+    if (!tokenResult.success) return tokenResult;
+    cachedToken = tokenResult.data;
+    tokenCreatedAt = Date.now();
+    return ok(createOctokit(tokenResult.data));
   }
 
   /**

@@ -1,5 +1,6 @@
-import { Octokit } from "@octokit/rest";
+import type { Octokit } from "@octokit/rest";
 import { describeError } from "@/lib/errors";
+import { createOctokit } from "@/lib/github/octokit";
 import type { UserAccess } from "@/types/access";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
@@ -50,7 +51,7 @@ export async function fetchUserRepositoryAccess(
   accessToken: string,
 ): Promise<Result<UserAccess, string>> {
   try {
-    const octokit = new Octokit({ auth: accessToken });
+    const octokit = createOctokit(accessToken);
     const installations = await octokit.paginate(
       octokit.apps.listInstallationsForAuthenticatedUser,
       { per_page: PAGE_SIZE },
