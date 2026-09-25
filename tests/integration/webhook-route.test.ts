@@ -69,6 +69,7 @@ describe("POST /api/webhooks/github", () => {
 
     expect(response.status).toBe(400);
     expect(enqueueReviewJob).not.toHaveBeenCalled();
+    expect(enqueueDeltaReviewJob).not.toHaveBeenCalled();
   });
 
   it("returns 401 and enqueues nothing when the signature is invalid", async () => {
@@ -91,6 +92,7 @@ describe("POST /api/webhooks/github", () => {
 
     expect(response.status).toBe(400);
     expect(enqueueReviewJob).not.toHaveBeenCalled();
+    expect(enqueueDeltaReviewJob).not.toHaveBeenCalled();
   });
 
   it("enqueues a review for an 'opened' pull request", async () => {
@@ -132,15 +134,18 @@ describe("POST /api/webhooks/github", () => {
     );
   });
 
-  it("acknowledges a non-reviewable pull request action without enqueuing", async () => {
-    const request = await buildWebhookRequest({
-      body: createPullRequestBody({ action: "closed" }),
-    });
+  it.each(["closed", "edited"])(
+    "acknowledges a '%s' pull request without enqueuing",
+    async (action) => {
+      const request = await buildWebhookRequest({
+        body: createPullRequestBody({ action }),
+      });
 
-    const response = await POST(request);
+      const response = await POST(request);
 
-    expect(response.status).toBe(200);
-    expect(enqueueReviewJob).not.toHaveBeenCalled();
-    expect(enqueueDeltaReviewJob).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(200);
+      expect(enqueueReviewJob).not.toHaveBeenCalled();
+      expect(enqueueDeltaReviewJob).not.toHaveBeenCalled();
+    },
+  );
 });
