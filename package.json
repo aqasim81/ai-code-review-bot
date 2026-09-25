@@ -11,13 +11,14 @@
     "lint:fix": "biome check --write .",
     "knip": "knip",
     "format": "biome format --write .",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "vitest run --project unit",
+    "test:db": "vitest run --project db",
+    "test:watch": "vitest --project unit",
+    "test:coverage": "vitest run --coverage --project unit",
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "validate": "biome check . && tsc --noEmit && knip && vitest run --coverage",
+    "validate": "biome check . && tsc --noEmit && knip && vitest run --coverage --project unit",
     "worker:dev": "tsx --env-file-if-exists=.env.local --tsconfig tsconfig.worker.json worker/index.ts"
   },
   "dependencies": {

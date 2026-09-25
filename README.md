@@ -123,7 +123,8 @@ See `.env.example` for all required variables. Key ones:
 | `pnpm dev` | Start Next.js dev server |
 | `pnpm worker:dev` | Start background worker |
 | `pnpm validate` | Run all checks (lint + type-check + knip + tests) |
-| `pnpm test` | Run Vitest tests |
+| `pnpm test` | Run Vitest unit tests |
+| `pnpm test:db` | Run the database tests against a real Postgres |
 | `pnpm test:coverage` | Run tests with coverage report |
 | `pnpm type-check` | TypeScript type checking |
 | `pnpm lint:fix` | Auto-fix lint and format issues |
@@ -152,6 +153,7 @@ worker/
 tests/
 ├── unit/                   # Unit tests (review/, llm/)
 ├── integration/            # Integration tests (webhook, pipeline, queue)
+├── db/                     # Query tests against a real Postgres
 ├── e2e/                    # Playwright E2E tests
 ├── fixtures/               # Test data (diffs, LLM responses)
 └── helpers/                # Test factories and utilities
@@ -165,6 +167,12 @@ pnpm test
 
 # Run with coverage
 pnpm test:coverage
+
+# Run the database tests (Postgres from docker compose, test database migrated)
+docker compose up -d postgres
+docker compose exec postgres createdb -U postgres ai_code_review_test
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/ai_code_review_test pnpm db:migrate
+pnpm test:db
 
 # Run E2E tests (requires dev server running)
 npx playwright test

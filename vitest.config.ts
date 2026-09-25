@@ -8,9 +8,29 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["tests/**/*.test.ts"],
-    setupFiles: ["./tests/setup.ts"],
     passWithNoTests: true,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["tests/**/*.test.ts"],
+          exclude: ["tests/db/**"],
+          setupFiles: ["./tests/setup.ts"],
+        },
+      },
+      // Runs the database queries against a real Postgres (`pnpm test:db`);
+      // test files share one database, so they run one at a time.
+      {
+        extends: true,
+        test: {
+          name: "db",
+          include: ["tests/db/**/*.test.ts"],
+          setupFiles: ["./tests/db/setup.ts"],
+          fileParallelism: false,
+        },
+      },
+    ],
     coverage: {
       provider: "v8",
       include: ["src/lib/**/*.ts"],
