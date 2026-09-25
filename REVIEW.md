@@ -17,4 +17,7 @@ At most five nits per review; summarise the rest as a count.
 Anything the formatter, linter or type checker already enforces; generated files; lockfiles.
 
 ## Project-specific focus
-<!-- Add what matters in review for this codebase: domain rules, risky modules, contracts consumers depend on. -->
+- **Scope:** report bugs the diff introduces, and siblings of the fixed bug that the diff leaves unfixed. Do not audit unrelated code nearby; bug hunting happens in planned audits by kind of bug, so it produces a finite list.
+- **Check each change against "Known mistakes to avoid" in CLAUDE.md:** NUL and range limits before a database write, status-guarded writes and a final status on every exit path, error classification on external calls, old-file vs new-file line numbers.
+- **Risky modules:** `src/lib/queue/processor.ts`, `worker/index.ts` and `src/lib/review/engine.ts` (lifecycle and retries); `src/lib/github/api.ts` and `src/lib/llm/client.ts` (external error handling).
+- **Fixes that create new risks:** a change that makes a failure permanent, adds a delay or changes a retry count must say what can now be lost or delayed.
