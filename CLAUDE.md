@@ -101,7 +101,7 @@ pnpm test             # Vitest
 1. `src/lib/` has zero Next.js imports (pure TypeScript business logic). Enforced by a Biome `noRestrictedImports` override.
 2. Webhook signatures are validated before any job is enqueued.
 3. All database access goes through `src/lib/db/queries.ts`. Enforced by a Biome `noRestrictedImports` override: only `src/lib/db/` may import the Prisma client, the generated client or `pg` (type-only enum imports from `@/generated/prisma/enums` are fine).
-4. Business logic returns the Result type and never throws, except env validation at startup (`src/lib/env.ts`) and the queue processor, which throws so BullMQ retries; external calls are wrapped at the boundary.
+4. Business logic returns the Result type and never throws, except env validation at startup (`src/lib/env.ts`) and the queue processor, which throws so BullMQ retries; external calls are wrapped at the boundary. Enforced by `tests/invariants/no-throw.test.ts`, which scans `src/lib/`; any other throw needs a `// throw-ok: <where it is caught>` comment on the line before.
 5. Configuration only through `src/lib/env.ts`; never raw `process.env` in `src/`. Enforced by Biome `noProcessEnv` (off only for `src/lib/env.ts`), a Biome ban on importing `process`/`node:process` in `src/`, and `tests/invariants/config-access.test.ts` for bracket and destructured access.
 6. No AI or LLM provider names in code, comments, prompts or user-facing strings, except model IDs, the SDK dependency and its API-key env var. Enforced by `tests/invariants/provider-names.test.ts`, which scans source files in `src/` and `worker/` (including names inside identifiers). `tests/` is not scanned; that test has to name what it looks for.
 7. No unused imports or variables (Biome, enforced in CI).

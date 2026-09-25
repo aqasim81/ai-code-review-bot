@@ -222,6 +222,7 @@ async function createRepositoryForReview(
       select: REVIEW_REPOSITORY_SELECT,
     });
   } catch (error) {
+    // throw-ok: findOrCreateRepositoryForReview catches it and returns a Result.
     if (!isUniqueConstraintViolation(error)) throw error;
     return prisma.repository.findUnique({
       where: {
