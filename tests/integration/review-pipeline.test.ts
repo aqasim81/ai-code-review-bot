@@ -1154,6 +1154,57 @@ describe("executeReview — review pipeline", () => {
   });
 });
 
+describe("executeReview — superseded commits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithHead(headSha: string) {
+    return Object.assign(
+      createMockGitHubService({
+        fetchPullRequestDiff: vi
+          .fn()
+          .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      }),
+      { fetchPullRequestHeadSha: vi.fn().mockResolvedValue(ok(headSha)) },
+    );
+  }
+
+  it("does not post or complete a review of a commit newer pushes replaced", async () => {
+    const github = githubWithHead("newer-commit-sha");
+
+    const result = await executeReview(
+      createReviewRequest({ commitSha: "abc123def456" }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(github.fetchPullRequestHeadSha).toHaveBeenCalledWith(
+      "test-owner",
+      "test-repo",
+      42,
+    );
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(markReviewCompleted).not.toHaveBeenCalled();
+  });
+
+  it("posts the review when the commit is still the pull request's head", async () => {
+    const github = githubWithHead("abc123def456");
+
+    const result = await executeReview(
+      createReviewRequest({ commitSha: "abc123def456" }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+    expect(markReviewCompleted).toHaveBeenCalled();
+  });
+});
+
 describe("executeReview — repository settings", () => {
   const TWO_FILE_DIFF = [
     "diff --git a/src/a.ts b/src/a.ts",
