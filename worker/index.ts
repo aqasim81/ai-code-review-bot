@@ -7,6 +7,7 @@ import {
   calculateBackoffDelay,
   isFinalJobFailure,
   processReviewJob,
+  recordFinalJobFailure,
 } from "@/lib/queue/processor";
 import { reviewJobLogContext } from "@/lib/queue/producer";
 import type { ReviewJobData } from "@/lib/queue/types";
@@ -93,6 +94,7 @@ async function handleJobFailed(
       error: error.message,
       attemptsMade: job.attemptsMade,
     });
+    await recordFinalJobFailure(job, error);
     await moveToDeadLetterQueue(
       deadLetterQueue,
       job.id,

@@ -598,6 +598,31 @@ export async function updateJobRecord(
   });
 }
 
+/**
+ * Marks a job record FAILED unless it already has a final status. Returns
+ * false when it was already COMPLETED or FAILED.
+ */
+export async function failUnfinishedJobRecord(
+  id: string,
+  details: { lastError: string; attempts: number },
+): Promise<Result<boolean, string>> {
+  return runQuery(
+    "Failed to mark unfinished job record as failed",
+    async () => {
+      const { count } = await prisma.job.updateMany({
+        where: { id, status: { in: ["QUEUED", "PROCESSING"] } },
+        data: {
+          status: "FAILED",
+          lastError: details.lastError,
+          attempts: details.attempts,
+          processedAt: new Date(),
+        },
+      });
+      return ok(count > 0);
+    },
+  );
+}
+
 // --- Dashboard queries (Phase 5: Dashboard UI) ---
 
 interface InstallationRecord {

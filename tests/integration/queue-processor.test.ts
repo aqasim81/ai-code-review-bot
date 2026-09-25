@@ -8,6 +8,7 @@ vi.mock("@/lib/review/engine");
 import { type Job, UnrecoverableError } from "bullmq";
 import {
   createJobRecord,
+  failUnfinishedJobRecord,
   findLastReviewedCommitSha,
   updateJobRecord,
 } from "@/lib/db/queries";
@@ -17,6 +18,7 @@ import {
   calculateBackoffDelay,
   isFinalJobFailure,
   processReviewJob,
+  recordFinalJobFailure,
 } from "@/lib/queue/processor";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { executeReview } from "@/lib/review/engine";
@@ -516,5 +518,33 @@ describe("isFinalJobFailure", () => {
 
   it("is not final while attempts remain", () => {
     expect(isFinalJobFailure(job(1), new Error("boom"))).toBe(false);
+  });
+});
+
+describe("recordFinalJobFailure", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(failUnfinishedJobRecord).mockResolvedValue(ok(true));
+  });
+
+  it("fails the job record of a job BullMQ failed for stalling too often", async () => {
+    const job = createMockJob({ attemptsMade: 1 });
+    job.data = { ...job.data, dbJobId: "db-job-7" };
+
+    await recordFinalJobFailure(
+      job,
+      new UnrecoverableError("job stalled more than allowable limit"),
+    );
+
+    expect(failUnfinishedJobRecord).toHaveBeenCalledWith("db-job-7", {
+      lastError: "job stalled more than allowable limit",
+      attempts: 1,
+    });
+  });
+
+  it("does nothing when the job never saved a record", async () => {
+    await recordFinalJobFailure(createMockJob(), new Error("boom"));
+
+    expect(failUnfinishedJobRecord).not.toHaveBeenCalled();
   });
 });

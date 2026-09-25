@@ -1,9 +1,11 @@
 import { type Job, UnrecoverableError } from "bullmq";
 import {
   createJobRecord,
+  failUnfinishedJobRecord,
   findLastReviewedCommitSha,
   updateJobRecord,
 } from "@/lib/db/queries";
+import { describeError } from "@/lib/errors";
 import { createGitHubServiceFromEnv } from "@/lib/github/api";
 import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
@@ -123,7 +125,23 @@ async function getOrCreateDbJobId(
   }
 
   const dbJobId = result.data.id;
-  await job.updateData({ ...job.data, dbJobId });
+  try {
+    await job.updateData({ ...job.data, dbJobId });
+  } catch (error) {
+    // The retry cannot find this record, so it would stay PROCESSING forever.
+    logger.error("Failed to save the job record ID on the job", {
+      jobId: job.id,
+      dbJobId,
+      error: describeError(error),
+    });
+    await markJobFailed(
+      dbJobId,
+      "JOB_RECORD_ID_NOT_SAVED",
+      job.attemptsMade + 1,
+    );
+    // throw-ok: BullMQ catches it and retries the job with a new record.
+    throw error;
+  }
   return dbJobId;
 }
 
@@ -316,6 +334,38 @@ export function calculateBackoffDelay(
     return GITHUB_RATE_LIMIT_RETRY_DELAY_MS;
   }
   return exponentialDelayMs(10_000, 3, attemptsMade);
+}
+
+/**
+ * Gives the job record a final status after the job's last failure. BullMQ
+ * fails some jobs without running processReviewJob (a job that stalled more
+ * than the allowed number of times), and those would stay PROCESSING. A
+ * record processReviewJob already finished is left as it is.
+ */
+export async function recordFinalJobFailure(
+  job: Job<ReviewJobData>,
+  error: Error,
+): Promise<void> {
+  const { dbJobId } = job.data;
+  if (typeof dbJobId !== "string") return;
+  const result = await failUnfinishedJobRecord(dbJobId, {
+    lastError: error.message,
+    attempts: job.attemptsMade,
+  });
+  if (!result.success) {
+    logger.warn("Failed to mark job as failed in database", {
+      dbJobId,
+      error: result.error,
+    });
+    return;
+  }
+  if (result.data) {
+    logger.warn("Job failed outside the review processor", {
+      jobId: job.id,
+      dbJobId,
+      error: error.message,
+    });
+  }
 }
 
 /**
