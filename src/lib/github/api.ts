@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import { Octokit } from "@octokit/rest";
 import { env } from "@/lib/env";
+import { selectReviewWithMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
 import type { GitHubError } from "@/types/errors";
 import type {
@@ -113,12 +114,14 @@ export function createGitHubServiceFromEnv(
   return createGitHubService(
     { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_PRIVATE_KEY },
     installationId,
+    `${env.GITHUB_APP_SLUG}[bot]`,
   );
 }
 
 function createGitHubService(
   credentials: GitHubAppCredentials,
   installationId: number,
+  botLogin: string,
 ): GitHubService {
   let cachedToken: string | null = null;
   let tokenCreatedAt = 0;
@@ -277,6 +280,53 @@ function createGitHubService(
           clearToken();
         }
         logger.error("Failed to post review", {
+          owner,
+          repo,
+          pullNumber,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return err(classifyGitHubError(error));
+      }
+    },
+
+    async findPostedReview(
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      marker: string,
+    ): Promise<Result<{ githubReviewId: number } | null, GitHubError>> {
+      const octokitResult = await getOctokit();
+      if (!octokitResult.success) return octokitResult;
+      const octokit = octokitResult.data;
+
+      try {
+        await checkRateLimit(octokit);
+
+        const reviews = await octokit.paginate(octokit.pulls.listReviews, {
+          owner,
+          repo,
+          pull_number: pullNumber,
+          per_page: 100,
+        });
+
+        return ok(
+          selectReviewWithMarker(
+            reviews.map((review) => ({
+              id: review.id,
+              body: review.body,
+              user: review.user
+                ? { login: review.user.login, type: review.user.type }
+                : null,
+            })),
+            marker,
+            botLogin,
+          ),
+        );
+      } catch (error) {
+        if (isAuthError(error)) {
+          clearToken();
+        }
+        logger.error("Failed to list pull request reviews", {
           owner,
           repo,
           pullNumber,

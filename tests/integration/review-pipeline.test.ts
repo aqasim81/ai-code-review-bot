@@ -344,6 +344,76 @@ describe("executeReview — review pipeline", () => {
     );
   });
 
+  it("marks the posted review body with a hidden marker for the review ID", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+
+    await executeReview(createReviewRequest(), github, createMockLlmService());
+
+    const marker = `<!-- code-review-bot:review=${reviewId()} -->`;
+    expect(github.findPostedReview).toHaveBeenCalledWith(
+      "test-owner",
+      "test-repo",
+      42,
+      marker,
+    );
+    expect(github.postPullRequestReview).toHaveBeenCalledWith(
+      "test-owner",
+      "test-repo",
+      42,
+      expect.objectContaining({ body: expect.stringContaining(marker) }),
+    );
+  });
+
+  it("skips posting and completes the review when an earlier attempt already posted it", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      findPostedReview: vi.fn().mockResolvedValue(ok({ githubReviewId: 7 })),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(markReviewCompleted).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      expect.any(Number),
+    );
+  });
+
+  it("fails the review without posting when the existing-review lookup fails", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      findPostedReview: vi.fn().mockResolvedValue(err("GITHUB_UNKNOWN_ERROR")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_POST_FAILED");
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      "Failed to check for an existing review on GitHub",
+    );
+  });
+
   it("saves review comments to database", async () => {
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi

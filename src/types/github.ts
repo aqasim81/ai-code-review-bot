@@ -59,6 +59,14 @@ export interface GitHubService {
     review: PullRequestReviewPayload,
   ): Promise<Result<PostedReviewResult, GitHubError>>;
 
+  /** Finds this bot's review on the PR carrying `marker`, if one was posted. */
+  findPostedReview(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    marker: string,
+  ): Promise<Result<{ githubReviewId: number } | null, GitHubError>>;
+
   compareCommits(
     owner: string,
     repo: string,

@@ -9,6 +9,7 @@ import {
   markReviewCompleted,
   saveReviewFindings,
 } from "@/lib/db/queries";
+import { buildReviewMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
@@ -460,6 +461,41 @@ async function ensureClaimIsCurrent(
   return ok(undefined);
 }
 
+/**
+ * Looks for this review on the PR from an earlier attempt: one whose post
+ * reached GitHub even though the attempt then failed or was reclaimed.
+ */
+async function wasPostedByEarlierAttempt(
+  context: ReviewStepsContext,
+  marker: string,
+): Promise<Result<boolean, ReviewEngineError>> {
+  const { githubService, owner, repo, request, claim } = context;
+  const lookupResult = await githubService.findPostedReview(
+    owner,
+    repo,
+    request.pullRequestNumber,
+    marker,
+  );
+  if (!lookupResult.success) {
+    logger.error("Failed to check for an existing review on GitHub", {
+      reviewId: claim.reviewId,
+      error: lookupResult.error,
+    });
+    await markReviewFailed(
+      claim,
+      "Failed to check for an existing review on GitHub",
+    );
+    return err("REVIEW_POST_FAILED");
+  }
+  if (lookupResult.data) {
+    logger.info("Review already posted by an earlier attempt, not reposting", {
+      reviewId: claim.reviewId,
+      githubReviewId: lookupResult.data.githubReviewId,
+    });
+  }
+  return ok(lookupResult.data !== null);
+}
+
 async function postReviewToGitHub(
   context: ReviewStepsContext,
   payload: PullRequestReviewPayload,
@@ -468,11 +504,16 @@ async function postReviewToGitHub(
   const claimCheck = await ensureClaimIsCurrent(claim);
   if (!claimCheck.success) return claimCheck;
 
+  const marker = buildReviewMarker(claim.reviewId);
+  const earlierPost = await wasPostedByEarlierAttempt(context, marker);
+  if (!earlierPost.success) return earlierPost;
+  if (earlierPost.data) return ok(undefined);
+
   const postResult = await githubService.postPullRequestReview(
     owner,
     repo,
     request.pullRequestNumber,
-    payload,
+    { ...payload, body: `${payload.body}\n\n${marker}` },
   );
 
   if (!postResult.success) {
