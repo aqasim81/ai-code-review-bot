@@ -28,12 +28,20 @@ Respond with ONLY a JSON array of findings. No markdown, no explanation, no prea
 
 Each finding must have these exact fields:
 - "filePath": string — the file path as shown in the diff
-- "lineNumber": number — the 1-based line number in the new file where the issue occurs
+- "lineNumber": number — the 1-based line number in the new file where the issue occurs (see Line Labels)
 - "category": string — one of "SECURITY", "BUGS", "PERFORMANCE", "STYLE", "BEST_PRACTICES"
 - "severity": string — one of "CRITICAL", "WARNING", "SUGGESTION", "NITPICK"
 - "message": string — clear description of the issue (1-2 sentences)
 - "suggestion": string — how to fix it, with a brief code example if helpful
 - "confidence": number — 0.0 to 1.0, how confident you are this is a real issue
+
+## Line Labels
+
+Each diff line is labelled with its line number:
+- Added (+) and unchanged lines are labelled \`L<n>\`, where n is the line number in the new file.
+- Removed (-) lines are labelled \`old L<n>\`, where n is the line number in the old file.
+
+Report "lineNumber" from an \`L<n>\` label only. Never report the number of an \`old L<n>\` line: for an issue in removed code, use the nearest new-file line, i.e. the line that replaced it or else the next unchanged line.
 
 ## Example Output
 
@@ -127,8 +135,13 @@ function formatFileForPrompt(file: FileReviewContext): string {
     for (const line of enriched.hunk.lines) {
       const prefix =
         line.type === "added" ? "+" : line.type === "removed" ? "-" : " ";
-      const lineNum = line.newLineNumber ?? line.oldLineNumber ?? "";
-      parts.push(`${prefix} L${lineNum}: ${line.content}`);
+      // Removed lines exist only in the old file; label them differently so
+      // their number is never taken for a new-file line number.
+      const label =
+        line.type === "removed"
+          ? `old L${line.oldLineNumber ?? ""}`
+          : `L${line.newLineNumber ?? ""}`;
+      parts.push(`${prefix} ${label}: ${line.content}`);
     }
   }
 
