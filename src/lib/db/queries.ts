@@ -590,29 +590,62 @@ interface CreateJobRecordInput {
   initialStatus?: "QUEUED" | "PROCESSING";
 }
 
+/**
+ * The job record a run of a queue job owns. Every run claims the record with
+ * a new token; status writes only apply while the token is still current.
+ */
+export interface JobRecordRun {
+  readonly id: string;
+  readonly runToken: string;
+}
+
 export async function createJobRecord(
   input: CreateJobRecordInput,
-): Promise<Result<{ id: string }, string>> {
+): Promise<Result<JobRecordRun, string>> {
+  const runToken = randomUUID();
   return runQuery("Failed to create job record", async () => {
     const job = await prisma.job.create({
       data: {
         type: input.type,
         payload: input.payload,
         status: input.initialStatus ?? "QUEUED",
+        runToken,
       },
     });
-    return ok({ id: job.id });
+    return ok({ id: job.id, runToken });
   });
 }
 
-export async function updateJobRecord(
+/**
+ * Hands the job record to a new run of its queue job: PROCESSING with a new
+ * run token. An earlier run that is still going (it lost its queue lock) can
+ * no longer write. Returns null when the record no longer exists.
+ */
+export async function claimJobRecord(
   id: string,
+): Promise<Result<JobRecordRun | null, string>> {
+  const runToken = randomUUID();
+  return runQuery("Failed to claim job record", async () => {
+    const { count } = await prisma.job.updateMany({
+      where: { id },
+      data: { status: "PROCESSING", runToken, processedAt: null },
+    });
+    return ok(count > 0 ? { id, runToken } : null);
+  });
+}
+
+/**
+ * Sets the status while `run` still owns the record. Returns false (and
+ * writes nothing) when a later run claimed it or it was closed as failed.
+ */
+export async function updateJobRecord(
+  run: JobRecordRun,
   status: JobStatus,
   details?: { lastError?: string; attempts?: number },
-): Promise<Result<void, string>> {
+): Promise<Result<boolean, string>> {
   return runQuery("Failed to update job record", async () => {
-    await prisma.job.update({
-      where: { id },
+    const { count } = await prisma.job.updateMany({
+      where: { id: run.id, runToken: run.runToken },
       data: {
         status,
         lastError: details?.lastError,
@@ -623,13 +656,14 @@ export async function updateJobRecord(
             : undefined,
       },
     });
-    return ok(undefined);
+    return ok(count > 0);
   });
 }
 
 /**
- * Marks a job record FAILED unless it already has a final status. Returns
- * false when it was already COMPLETED or FAILED.
+ * Marks a job record FAILED unless it already has a final status, and clears
+ * its run token so a run that is somehow still going can no longer write.
+ * Returns false when it was already COMPLETED or FAILED.
  */
 export async function failUnfinishedJobRecord(
   id: string,
@@ -644,6 +678,7 @@ export async function failUnfinishedJobRecord(
           status: "FAILED",
           lastError: details.lastError,
           attempts: details.attempts,
+          runToken: null,
           processedAt: new Date(),
         },
       });

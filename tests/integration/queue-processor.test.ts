@@ -7,6 +7,7 @@ vi.mock("@/lib/review/engine");
 
 import { type Job, UnrecoverableError } from "bullmq";
 import {
+  claimJobRecord,
   createJobRecord,
   failUnfinishedJobRecord,
   findLastReviewedCommitSha,
@@ -73,14 +74,20 @@ function createDeltaJob(
   } as unknown as Job<ReviewJobData>;
 }
 
+const NEW_RUN = { id: "db-job-1", runToken: "run-token-1" };
+const CLAIMED_RUN = { id: "existing-db-job", runToken: "run-token-2" };
+
 function setupDefaultMocks() {
   const mockGithubService = createMockGitHubService();
   const mockLlmService = createMockLlmService();
 
   vi.mocked(createGitHubServiceFromEnv).mockReturnValue(mockGithubService);
   vi.mocked(createLlmClient).mockReturnValue(mockLlmService);
-  vi.mocked(createJobRecord).mockResolvedValue(ok({ id: "db-job-1" }));
-  vi.mocked(updateJobRecord).mockResolvedValue(ok(undefined));
+  vi.mocked(createJobRecord).mockResolvedValue(ok(NEW_RUN));
+  vi.mocked(claimJobRecord).mockImplementation(async (id) =>
+    ok({ id, runToken: "run-token-2" }),
+  );
+  vi.mocked(updateJobRecord).mockResolvedValue(ok(true));
   vi.mocked(executeReview).mockResolvedValue(ok(createReviewEngineResult()));
   vi.mocked(findLastReviewedCommitSha).mockResolvedValue(
     ok("last-reviewed-sha"),
@@ -121,7 +128,11 @@ describe("processReviewJob", () => {
       expect.anything(),
       expect.anything(),
     );
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("creates DB job record on first attempt and stores ID", async () => {
@@ -154,9 +165,11 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(createJobRecord).not.toHaveBeenCalled();
+    expect(claimJobRecord).toHaveBeenCalledWith("existing-db-job");
     expect(updateJobRecord).toHaveBeenCalledWith(
-      "existing-db-job",
+      CLAIMED_RUN,
       "COMPLETED",
+      undefined,
     );
   });
 
@@ -179,9 +192,11 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(createJobRecord).not.toHaveBeenCalled();
+    expect(claimJobRecord).toHaveBeenCalledWith("existing-db-job");
     expect(updateJobRecord).toHaveBeenCalledWith(
-      "existing-db-job",
+      CLAIMED_RUN,
       "COMPLETED",
+      undefined,
     );
   });
 
@@ -191,7 +206,11 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(createJobRecord).toHaveBeenCalledTimes(1);
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("marks job completed when REVIEW_ALREADY_EXISTS", async () => {
@@ -201,7 +220,11 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("marks job completed when the repository is not reviewable", async () => {
@@ -211,7 +234,11 @@ describe("processReviewJob", () => {
 
     await processReviewJob(createMockJob());
 
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("skips a job queued before repository IDs were added to the payload", async () => {
@@ -230,7 +257,11 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(executeReview).not.toHaveBeenCalled();
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("marks job completed when another attempt holds the review (REVIEW_CLAIM_LOST)", async () => {
@@ -238,7 +269,11 @@ describe("processReviewJob", () => {
 
     await processReviewJob(createMockJob());
 
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+    expect(updateJobRecord).toHaveBeenCalledWith(
+      NEW_RUN,
+      "COMPLETED",
+      undefined,
+    );
   });
 
   it("throws before recording anything when the job has no ID", async () => {
@@ -257,7 +292,7 @@ describe("processReviewJob", () => {
     await expect(processReviewJob(job)).rejects.toThrow(
       "Review failed: REVIEW_LLM_FAILED",
     );
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "FAILED", {
+    expect(updateJobRecord).toHaveBeenCalledWith(NEW_RUN, "FAILED", {
       lastError: "REVIEW_LLM_FAILED",
       attempts: 1,
     });
@@ -274,7 +309,7 @@ describe("processReviewJob", () => {
 
     await expect(failure).rejects.toBeInstanceOf(UnrecoverableError);
     await expect(failure).rejects.toThrow(`Review failed: ${code}`);
-    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "FAILED", {
+    expect(updateJobRecord).toHaveBeenCalledWith(NEW_RUN, "FAILED", {
       lastError: code,
       attempts: 1,
     });
@@ -433,7 +468,7 @@ describe("processReviewJob", () => {
     await expect(processReviewJob(job)).rejects.toThrow("Connection is closed");
 
     expect(updateJobRecord).toHaveBeenCalledWith(
-      "db-job-1",
+      NEW_RUN,
       "FAILED",
       expect.objectContaining({ lastError: "JOB_RECORD_ID_NOT_SAVED" }),
     );
@@ -466,7 +501,30 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(executeReview).toHaveBeenCalled();
-    // updateJobRecord won't be called with null dbJobId
+    expect(updateJobRecord).not.toHaveBeenCalled();
+  });
+
+  it("writes no status when a later run claimed the job record", async () => {
+    vi.mocked(updateJobRecord).mockResolvedValue(ok(false));
+    vi.mocked(executeReview).mockResolvedValue(err("REVIEW_LLM_FAILED"));
+
+    await expect(processReviewJob(createMockJob())).rejects.toThrow(
+      "Review failed: REVIEW_LLM_FAILED",
+    );
+
+    expect(updateJobRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it("reviews without a job record when claiming the saved one fails", async () => {
+    vi.mocked(claimJobRecord).mockResolvedValue(err("DB error"));
+    const job = createMockJob({
+      data: { ...createMockJob().data, dbJobId: "existing-db-job" },
+    });
+
+    await processReviewJob(job);
+
+    expect(executeReview).toHaveBeenCalled();
+    expect(updateJobRecord).not.toHaveBeenCalled();
   });
 });
 

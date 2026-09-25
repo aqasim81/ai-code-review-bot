@@ -126,6 +126,8 @@ model Job {
   status      JobStatus @default(QUEUED)
   attempts    Int       @default(0)
   lastError   String?
+  /// Set by each run that claims the record; status writes need the current token.
+  runToken    String?
   createdAt   DateTime  @default(now())
   processedAt DateTime?
 

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { JobStatus } from "@/generated/prisma/enums";
 import {
   claimExistingReview,
+  claimJobRecord,
   createJobRecord,
   createReviewRecord,
   failReview,
@@ -132,7 +134,7 @@ describe("status-guarded job record updates in Postgres (#66)", () => {
     });
     if (!created.success) throw new Error(created.error);
     if (status !== "PROCESSING") {
-      await updateJobRecord(created.data.id, status, {
+      await updateJobRecord(created.data, status, {
         lastError: status === "FAILED" ? "LLM_TIMEOUT" : undefined,
       });
     }
@@ -174,5 +176,86 @@ describe("status-guarded job record updates in Postgres (#66)", () => {
     expect(
       await testPrisma.job.findUniqueOrThrow({ where: { id } }),
     ).toMatchObject({ status, lastError });
+  });
+});
+
+describe("job record status writes fenced by the run token (#115)", () => {
+  async function createRun() {
+    const created = await createJobRecord({
+      type: "review-pr",
+      payload: { pullRequestNumber: 7 },
+      initialStatus: "PROCESSING",
+    });
+    if (!created.success) throw new Error(created.error);
+    return created.data;
+  }
+
+  async function claimRun(id: string) {
+    const claimed = await claimJobRecord(id);
+    if (!claimed.success || claimed.data === null) {
+      throw new Error("claim failed");
+    }
+    return claimed.data;
+  }
+
+  it("ignores a write from a run that a later run replaced", async () => {
+    const runA = await createRun();
+    const runB = await claimRun(runA.id);
+    await updateJobRecord(runB, "COMPLETED");
+
+    const written = await updateJobRecord(runA, "FAILED", {
+      lastError: "REVIEW_LLM_FAILED",
+      attempts: 1,
+    });
+
+    expect(written).toEqual({ success: true, data: false });
+    expect(
+      await testPrisma.job.findUniqueOrThrow({ where: { id: runA.id } }),
+    ).toMatchObject({ status: "COMPLETED", lastError: null });
+  });
+
+  it("lets a retry move a FAILED attempt's record to COMPLETED", async () => {
+    const first = await createRun();
+    await updateJobRecord(first, "FAILED", {
+      lastError: "REVIEW_LLM_FAILED",
+      attempts: 1,
+    });
+
+    const retry = await claimRun(first.id);
+    const row = await testPrisma.job.findUniqueOrThrow({
+      where: { id: first.id },
+    });
+    expect(row).toMatchObject({ status: "PROCESSING", processedAt: null });
+
+    expect(await updateJobRecord(retry, "COMPLETED")).toEqual({
+      success: true,
+      data: true,
+    });
+    expect(
+      await testPrisma.job.findUniqueOrThrow({ where: { id: first.id } }),
+    ).toMatchObject({ status: "COMPLETED" });
+  });
+
+  it("stops a still-running run from writing after the record was failed", async () => {
+    const run = await createRun();
+    await failUnfinishedJobRecord(run.id, {
+      lastError: "job stalled more than allowable limit",
+      attempts: 1,
+    });
+
+    expect(await updateJobRecord(run, "COMPLETED")).toEqual({
+      success: true,
+      data: false,
+    });
+    expect(
+      await testPrisma.job.findUniqueOrThrow({ where: { id: run.id } }),
+    ).toMatchObject({ status: "FAILED" });
+  });
+
+  it("returns null when claiming a record that no longer exists", async () => {
+    expect(await claimJobRecord(randomUUID())).toEqual({
+      success: true,
+      data: null,
+    });
   });
 });
