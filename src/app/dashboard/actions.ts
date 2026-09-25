@@ -9,6 +9,7 @@ import {
   updateRepositorySettings,
 } from "@/lib/db/queries";
 import { canManageRepository } from "@/lib/github/repository-access";
+import { logger } from "@/lib/logger";
 import type { AccessScope } from "@/types/access";
 import type { RepositoryId } from "@/types/branded";
 import { repositorySettingsSchema } from "@/types/settings";
@@ -21,6 +22,12 @@ const repositoryIdSchema = z.string().uuid();
 const isEnabledSchema = z.boolean();
 
 const UNAUTHORIZED: ActionResult = { success: false, error: "Unauthorized" };
+// Database errors carry internal detail; log it and show the user this.
+const SAVE_FAILED: ActionResult = {
+  success: false,
+  error: "Could not save the change. Please try again.",
+};
+
 const FORBIDDEN: ActionResult = {
   success: false,
   error: "You need admin or maintain permission on this repository.",
@@ -66,7 +73,11 @@ export async function toggleRepositoryEnabledAction(
     authorization.scope,
   );
   if (!result.success) {
-    return { success: false, error: result.error };
+    logger.error("Failed to update repository", {
+      repositoryId,
+      error: result.error,
+    });
+    return SAVE_FAILED;
   }
   if (!result.data) return FORBIDDEN;
 
@@ -110,7 +121,11 @@ export async function saveRepositorySettingsAction(
     authorization.scope,
   );
   if (!result.success) {
-    return { success: false, error: result.error };
+    logger.error("Failed to save repository settings", {
+      repositoryId,
+      error: result.error,
+    });
+    return SAVE_FAILED;
   }
   if (!result.data) return FORBIDDEN;
 
