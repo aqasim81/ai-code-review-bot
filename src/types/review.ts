@@ -146,6 +146,8 @@ export interface ReviewRequest {
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;
+  /** Queue job running this review; stable across retries of the same job. */
+  readonly jobId: string;
   readonly filePathFilter?: readonly string[];
 }
 
@@ -154,4 +156,14 @@ export interface ReviewEngineResult {
   readonly issuesFound: number;
   readonly processingTimeMs: number;
   readonly summary: string;
+}
+
+/**
+ * One attempt's hold on a review. The token changes on every claim, so an
+ * attempt that lost the review (another attempt reclaimed it) can detect that
+ * and stop instead of writing over the new owner's work.
+ */
+export interface ReviewClaimRef {
+  readonly reviewId: ReviewId;
+  readonly claimToken: string;
 }

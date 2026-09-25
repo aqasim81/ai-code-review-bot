@@ -77,18 +77,21 @@ model Repository {
 }
 
 model Review {
-  id                String         @id @default(uuid())
-  repositoryId      String
-  repository        Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
-  pullRequestNumber Int
-  commitSha         String
-  status            ReviewStatus   @default(PROCESSING)
-  summary           String?
-  issuesFound       Int            @default(0)
-  processingTimeMs  Int?
-  createdAt         DateTime       @default(now())
-  completedAt       DateTime?
-  comments          ReviewComment[]
+  id                  String          @id @default(uuid())
+  repositoryId        String
+  repository          Repository      @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  pullRequestNumber   Int
+  commitSha           String
+  status              ReviewStatus    @default(PROCESSING)
+  summary             String?
+  issuesFound         Int             @default(0)
+  processingTimeMs    Int?
+  claimedByJobId      String?
+  claimToken          String?
+  processingStartedAt DateTime?
+  createdAt           DateTime        @default(now())
+  completedAt         DateTime?
+  comments            ReviewComment[]
 
   @@unique([repositoryId, commitSha])
   @@index([repositoryId, pullRequestNumber, status, createdAt])

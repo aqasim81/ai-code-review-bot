@@ -130,6 +130,7 @@ function buildDeltaFilePathFilter(
 
 async function buildReviewRequest(
   job: Job<ReviewJobData>,
+  jobId: string,
   githubService: GitHubService,
 ): Promise<ReviewRequest> {
   const { type, payload } = job.data;
@@ -138,6 +139,7 @@ async function buildReviewRequest(
     repositoryFullName: payload.repositoryFullName,
     pullRequestNumber: payload.pullRequestNumber,
     commitSha: payload.commitSha,
+    jobId,
   };
 
   if (type !== "review-pr-delta") return baseRequest;
@@ -167,6 +169,10 @@ async function buildReviewRequest(
 
 export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
   const { type, payload } = job.data;
+  const jobId = job.id;
+  if (jobId === undefined) {
+    throw new Error("Review job has no ID; cannot claim a review for it");
+  }
 
   logger.info("Processing review job", {
     jobId: job.id,
@@ -179,7 +185,7 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
   const dbJobId = await getOrCreateDbJobId(job);
   const githubService = createGitHubServiceFromEnv(payload.installationId);
   const llmService = createLlmClient();
-  const request = await buildReviewRequest(job, githubService);
+  const request = await buildReviewRequest(job, jobId, githubService);
   const result = await executeReview(request, githubService, llmService);
 
   if (result.success) {
@@ -193,9 +199,13 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     return;
   }
 
-  if (result.error === "REVIEW_ALREADY_EXISTS") {
-    logger.info("Review already exists for this commit, skipping", {
+  if (
+    result.error === "REVIEW_ALREADY_EXISTS" ||
+    result.error === "REVIEW_CLAIM_LOST"
+  ) {
+    logger.info("Review is done or owned by another attempt, skipping", {
       jobId: job.id,
+      reason: result.error,
       commitSha: payload.commitSha,
     });
     await markJobCompleted(dbJobId);

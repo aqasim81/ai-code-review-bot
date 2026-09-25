@@ -16,6 +16,7 @@ export type GitHubError =
 
 export type ReviewEngineError =
   | "REVIEW_ALREADY_EXISTS"
+  | "REVIEW_CLAIM_LOST"
   | "REVIEW_DIFF_FETCH_FAILED"
   | "REVIEW_DIFF_PARSE_FAILED"
   | "REVIEW_LLM_FAILED"

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AccountType,
   InstallationStatus,
@@ -11,6 +12,7 @@ import type {
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
+import type { ReviewClaimRef } from "@/types/review";
 import type { RepositorySettingsInput } from "@/types/settings";
 import { prisma } from "./prisma-client";
 
@@ -105,23 +107,50 @@ export async function findExistingReviewByCommitSha(
   }
 }
 
+interface ClaimExistingReviewInput {
+  readonly jobId: string;
+  readonly pullRequestNumber: number;
+  readonly staleBefore: Date;
+}
+
 /**
- * Claims a FAILED review for a retry: moves it back to PROCESSING under the
- * retrying job's pull request and clears any comments left by the failed
- * attempt. Returns false when the review is no longer FAILED (another job
- * already claimed it).
+ * Atomically claims an existing review for the given job and clears anything
+ * left by the earlier attempt. A review can be claimed when it is FAILED, when
+ * it is PROCESSING under the same queue job (that attempt is no longer
+ * running), or when it has been PROCESSING or PENDING since before
+ * `staleBefore`. Returns null when another job still owns the review.
  */
-export async function resetFailedReviewForRetry(
+export async function claimExistingReview(
   reviewId: ReviewId,
-  pullRequestNumber: number,
-): Promise<Result<boolean, string>> {
+  claim: ClaimExistingReviewInput,
+): Promise<Result<ReviewClaimRef | null, string>> {
+  const claimToken = randomUUID();
   try {
     const claimed = await prisma.$transaction(async (tx) => {
       const { count } = await tx.review.updateMany({
-        where: { id: reviewId, status: "FAILED" },
+        where: {
+          id: reviewId,
+          OR: [
+            { status: "FAILED" },
+            { status: "PROCESSING", claimedByJobId: claim.jobId },
+            {
+              status: { in: ["PROCESSING", "PENDING"] },
+              OR: [
+                { processingStartedAt: { lt: claim.staleBefore } },
+                {
+                  processingStartedAt: null,
+                  createdAt: { lt: claim.staleBefore },
+                },
+              ],
+            },
+          ],
+        },
         data: {
           status: "PROCESSING",
-          pullRequestNumber,
+          claimedByJobId: claim.jobId,
+          claimToken,
+          processingStartedAt: new Date(),
+          pullRequestNumber: claim.pullRequestNumber,
           summary: null,
           issuesFound: 0,
           processingTimeMs: null,
@@ -132,11 +161,11 @@ export async function resetFailedReviewForRetry(
       await tx.reviewComment.deleteMany({ where: { reviewId } });
       return true;
     });
-    return ok(claimed);
+    return ok(claimed ? { reviewId, claimToken } : null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
-    return err(`Failed to reset review for retry: ${message}`);
+    return err(`Failed to claim review: ${message}`);
   }
 }
 
@@ -144,11 +173,13 @@ interface CreateReviewInput {
   repositoryId: RepositoryId;
   pullRequestNumber: number;
   commitSha: string;
+  claimedByJobId: string;
 }
 
 export async function createReviewRecord(
   input: CreateReviewInput,
-): Promise<Result<{ id: ReviewId }, string>> {
+): Promise<Result<ReviewClaimRef, string>> {
+  const claimToken = randomUUID();
   try {
     const review = await prisma.review.create({
       data: {
@@ -156,9 +187,12 @@ export async function createReviewRecord(
         pullRequestNumber: input.pullRequestNumber,
         commitSha: input.commitSha,
         status: "PROCESSING",
+        claimedByJobId: input.claimedByJobId,
+        claimToken,
+        processingStartedAt: new Date(),
       },
     });
-    return ok({ id: review.id as ReviewId });
+    return ok({ reviewId: review.id as ReviewId, claimToken });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -177,31 +211,44 @@ interface SaveReviewCommentInput {
   githubCommentId: string | null;
 }
 
-interface SaveReviewFindingsInput {
-  reviewId: ReviewId;
+interface SaveReviewFindingsInput extends ReviewClaimRef {
   summary: string;
   issuesFound: number;
   comments: SaveReviewCommentInput[];
 }
 
-/** Saves the findings and summary; the review stays PROCESSING until posted. */
+/** Matches the review only while this attempt's claim is still current. */
+function currentClaimFilter(claim: ReviewClaimRef) {
+  return {
+    id: claim.reviewId,
+    claimToken: claim.claimToken,
+    status: "PROCESSING" as const,
+  };
+}
+
+/**
+ * Saves the findings and summary; the review stays PROCESSING until posted.
+ * Returns false (and writes nothing) when the claim was lost.
+ */
 export async function saveReviewFindings(
   input: SaveReviewFindingsInput,
-): Promise<Result<void, string>> {
+): Promise<Result<boolean, string>> {
   try {
-    await prisma.$transaction([
-      prisma.reviewComment.createMany({
+    const saved = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.review.updateMany({
+        where: currentClaimFilter(input),
+        data: { summary: input.summary, issuesFound: input.issuesFound },
+      });
+      if (count === 0) return false;
+      await tx.reviewComment.createMany({
         data: input.comments.map((comment) => ({
           ...comment,
           reviewId: input.reviewId,
         })),
-      }),
-      prisma.review.update({
-        where: { id: input.reviewId },
-        data: { summary: input.summary, issuesFound: input.issuesFound },
-      }),
-    ]);
-    return ok(undefined);
+      });
+      return true;
+    });
+    return ok(saved);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -209,16 +256,32 @@ export async function saveReviewFindings(
   }
 }
 
-export async function markReviewCompleted(
-  reviewId: ReviewId,
-  processingTimeMs: number,
-): Promise<Result<void, string>> {
+export async function isReviewClaimCurrent(
+  claim: ReviewClaimRef,
+): Promise<Result<boolean, string>> {
   try {
-    await prisma.review.update({
-      where: { id: reviewId },
+    const count = await prisma.review.count({
+      where: currentClaimFilter(claim),
+    });
+    return ok(count > 0);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to check review claim: ${message}`);
+  }
+}
+
+/** Returns false (and writes nothing) when the claim was lost. */
+export async function markReviewCompleted(
+  claim: ReviewClaimRef,
+  processingTimeMs: number,
+): Promise<Result<boolean, string>> {
+  try {
+    const { count } = await prisma.review.updateMany({
+      where: currentClaimFilter(claim),
       data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
     });
-    return ok(undefined);
+    return ok(count > 0);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
@@ -228,26 +291,31 @@ export async function markReviewCompleted(
 
 /**
  * Marks a review FAILED and drops any findings saved before the failure, since
- * they may never have been posted to GitHub.
+ * they may never have been posted to GitHub. Returns false (and writes
+ * nothing) when the claim was lost.
  */
 export async function failReview(
-  reviewId: ReviewId,
+  claim: ReviewClaimRef,
   errorMessage: string,
-): Promise<Result<void, string>> {
+): Promise<Result<boolean, string>> {
   try {
-    await prisma.$transaction([
-      prisma.reviewComment.deleteMany({ where: { reviewId } }),
-      prisma.review.update({
-        where: { id: reviewId },
+    const failed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.review.updateMany({
+        where: currentClaimFilter(claim),
         data: {
           status: "FAILED",
           summary: `Review failed: ${errorMessage}`,
           issuesFound: 0,
           completedAt: new Date(),
         },
-      }),
-    ]);
-    return ok(undefined);
+      });
+      if (count === 0) return false;
+      await tx.reviewComment.deleteMany({
+        where: { reviewId: claim.reviewId },
+      });
+      return true;
+    });
+    return ok(failed);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
