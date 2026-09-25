@@ -51,7 +51,7 @@ function createPullRequestBody(overrides?: Record<string, unknown>): string {
   return JSON.stringify({
     action: "opened",
     pull_request: { number: 42, head: { sha: HEAD_SHA } },
-    repository: { full_name: "test-owner/test-repo" },
+    repository: { id: 555, full_name: "test-owner/test-repo" },
     installation: { id: 12345 },
     ...overrides,
   });
@@ -114,7 +114,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: "42", head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },
@@ -124,7 +124,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: "abc:123" } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },
@@ -134,7 +134,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test:repo" },
+        repository: { id: 555, full_name: "test-owner/test:repo" },
         installation: { id: 12345 },
       },
     },
@@ -144,7 +144,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo/extra" },
+        repository: { id: 555, full_name: "test-owner/test-repo/extra" },
         installation: { id: 12345 },
       },
     },
@@ -155,7 +155,7 @@ describe("POST /api/webhooks/github", () => {
         action: "synchronize",
         before: "not-a-sha",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },

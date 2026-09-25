@@ -269,7 +269,7 @@ describe("handlePullRequestEvent", () => {
         number: 42,
         head: { sha: HEAD_SHA },
       },
-      repository: { full_name: "test-owner/test-repo" },
+      repository: { id: 555, full_name: "test-owner/test-repo" },
       installation: { id: 12345 },
       ...overrides,
     };
@@ -286,6 +286,7 @@ describe("handlePullRequestEvent", () => {
     expect(enqueueReviewJob).toHaveBeenCalledWith(
       expect.objectContaining({
         installationId: 12345,
+        githubRepoId: 555,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: HEAD_SHA,
@@ -300,7 +301,7 @@ describe("handlePullRequestEvent", () => {
     const result = await handlePullRequestEvent(
       createPrPayload({
         pull_request: { number: 42, head: { sha: sha256 } },
-        repository: { full_name: "my_org-1/repo.js" },
+        repository: { id: 555, full_name: "my_org-1/repo.js" },
       }),
     );
 
@@ -311,6 +312,15 @@ describe("handlePullRequestEvent", () => {
         commitSha: sha256,
       }),
     );
+  });
+
+  it("rejects a pull_request payload without a repository ID", async () => {
+    const result = await handlePullRequestEvent(
+      createPrPayload({ repository: { full_name: "test-owner/test-repo" } }),
+    );
+
+    expect(result).toEqual({ success: false, error: "INVALID_PAYLOAD" });
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
   it("enqueues delta review job for 'synchronize' with 'before' sha", async () => {

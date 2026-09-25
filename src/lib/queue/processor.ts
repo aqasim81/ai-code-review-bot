@@ -6,10 +6,19 @@ import { logger } from "@/lib/logger";
 import type { DeltaReviewJobPayload, ReviewJobData } from "@/lib/queue/types";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { executeReview } from "@/lib/review/engine";
+import type { ReviewEngineError } from "@/types/errors";
 import type { GitHubService } from "@/types/github";
 import type { ReviewRequest } from "@/types/review";
 
 const DELTA_FILE_THRESHOLD = 50;
+
+// Outcomes where retrying cannot help and nothing failed: the review is done,
+// another attempt owns it, or the repository is not reviewable.
+const SKIPPED_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
+  "REVIEW_ALREADY_EXISTS",
+  "REVIEW_CLAIM_LOST",
+  "REVIEW_REPOSITORY_UNAVAILABLE",
+]);
 
 async function fetchChangedFilesForDelta(
   previousCommitSha: string,
@@ -136,6 +145,7 @@ async function buildReviewRequest(
   const { type, payload } = job.data;
   const baseRequest: ReviewRequest = {
     installationId: payload.installationId,
+    githubRepoId: payload.githubRepoId,
     repositoryFullName: payload.repositoryFullName,
     pullRequestNumber: payload.pullRequestNumber,
     commitSha: payload.commitSha,
@@ -182,6 +192,15 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     attempt: job.attemptsMade + 1,
   });
 
+  // Jobs queued before the repository ID was added to the payload cannot be
+  // matched to a repository safely; the next push or reopen queues a new one.
+  if (typeof payload.githubRepoId !== "number") {
+    logger.warn("Review job has no repository ID, skipping", {
+      jobId: job.id,
+    });
+    return;
+  }
+
   const dbJobId = await getOrCreateDbJobId(job);
   const githubService = createGitHubServiceFromEnv(payload.installationId);
   const llmService = createLlmClient();
@@ -199,11 +218,8 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     return;
   }
 
-  if (
-    result.error === "REVIEW_ALREADY_EXISTS" ||
-    result.error === "REVIEW_CLAIM_LOST"
-  ) {
-    logger.info("Review is done or owned by another attempt, skipping", {
+  if (SKIPPED_REVIEW_ERRORS.has(result.error)) {
+    logger.info("Review has nothing to do, skipping", {
       jobId: job.id,
       reason: result.error,
       commitSha: payload.commitSha,

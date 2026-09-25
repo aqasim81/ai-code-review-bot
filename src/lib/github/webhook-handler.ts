@@ -50,7 +50,10 @@ const pullRequestEventPayloadSchema = pullRequestActionSchema.extend({
     number: z.number().int().positive(),
     head: z.object({ sha: commitShaSchema }),
   }),
-  repository: z.object({ full_name: repositoryFullNameSchema }),
+  repository: z.object({
+    id: z.number().int().positive(),
+    full_name: repositoryFullNameSchema,
+  }),
   installation: z.object({ id: z.number().int() }),
   before: commitShaSchema.optional(),
 });
@@ -234,6 +237,7 @@ export async function handlePullRequestEvent(
   if (payload.action === "synchronize" && payload.before) {
     const result = await enqueueDeltaReviewJob({
       installationId,
+      githubRepoId: payload.repository.id,
       repositoryFullName: payload.repository.full_name,
       pullRequestNumber: payload.pull_request.number,
       commitSha: payload.pull_request.head.sha,
@@ -253,6 +257,7 @@ export async function handlePullRequestEvent(
 
   const result = await enqueueReviewJob({
     installationId,
+    githubRepoId: payload.repository.id,
     repositoryFullName: payload.repository.full_name,
     pullRequestNumber: payload.pull_request.number,
     commitSha: payload.pull_request.head.sha,

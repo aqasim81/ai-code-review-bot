@@ -29,6 +29,7 @@ function createMockJob(
       type: "review-pr",
       payload: {
         installationId: 12345,
+        githubRepoId: 555,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: "abc123",
@@ -49,6 +50,7 @@ function createDeltaJob(
       type: "review-pr-delta",
       payload: {
         installationId: 12345,
+        githubRepoId: 555,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: "abc123",
@@ -96,6 +98,7 @@ describe("processReviewJob", () => {
     expect(executeReview).toHaveBeenCalledWith(
       expect.objectContaining({
         installationId: 12345,
+        githubRepoId: 555,
         repositoryFullName: "test-owner/test-repo",
         pullRequestNumber: 42,
         commitSha: "abc123",
@@ -125,6 +128,7 @@ describe("processReviewJob", () => {
         type: "review-pr",
         payload: {
           installationId: 12345,
+          githubRepoId: 555,
           repositoryFullName: "test-owner/test-repo",
           pullRequestNumber: 42,
           commitSha: "abc123",
@@ -149,6 +153,7 @@ describe("processReviewJob", () => {
         type: "review-pr",
         payload: {
           installationId: 12345,
+          githubRepoId: 555,
           repositoryFullName: "test-owner/test-repo",
           pullRequestNumber: 42,
           commitSha: "abc123",
@@ -183,6 +188,35 @@ describe("processReviewJob", () => {
     await processReviewJob(job);
 
     expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+  });
+
+  it("marks job completed when the repository is not reviewable", async () => {
+    vi.mocked(executeReview).mockResolvedValue(
+      err("REVIEW_REPOSITORY_UNAVAILABLE"),
+    );
+
+    await processReviewJob(createMockJob());
+
+    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+  });
+
+  it("skips a job queued before repository IDs were added to the payload", async () => {
+    const job = createMockJob({
+      data: {
+        type: "review-pr",
+        payload: {
+          installationId: 12345,
+          repositoryFullName: "test-owner/test-repo",
+          pullRequestNumber: 42,
+          commitSha: "abc123",
+        } as unknown as ReviewJobData["payload"],
+      } as ReviewJobData,
+    });
+
+    await processReviewJob(job);
+
+    expect(executeReview).not.toHaveBeenCalled();
+    expect(createJobRecord).not.toHaveBeenCalled();
   });
 
   it("marks job completed when another attempt holds the review (REVIEW_CLAIM_LOST)", async () => {

@@ -142,6 +142,7 @@ export interface CommentMappingResult {
 
 export interface ReviewRequest {
   readonly installationId: number;
+  readonly githubRepoId: number;
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;

@@ -68,20 +68,47 @@ export async function createInstallationWithRepositories(
 
 // --- Review queries ---
 
-export async function findRepositoryByFullName(
-  fullName: string,
-): Promise<
-  Result<{ id: RepositoryId; installationId: InstallationId } | null, string>
-> {
+interface RepositoryForReviewInput {
+  readonly githubInstallationId: number;
+  readonly githubRepoId: number;
+  readonly fullName: string;
+}
+
+/**
+ * Finds the repository a review job is for by its GitHub ID under the job's
+ * installation, so renames and old installations cannot mislead it. The
+ * stored name follows GitHub's. A missing row is created: a signed
+ * pull_request webhook proves the installation can see the repository.
+ * Returns null when the installation is unknown or not active.
+ */
+export async function findOrCreateRepositoryForReview(
+  input: RepositoryForReviewInput,
+): Promise<Result<{ id: RepositoryId; isEnabled: boolean } | null, string>> {
   try {
-    const repo = await prisma.repository.findFirst({
-      where: { fullName, isEnabled: true },
-      select: { id: true, installationId: true },
+    const installation = await prisma.installation.findUnique({
+      where: { githubInstallationId: input.githubInstallationId },
+      select: { id: true, status: true },
     });
-    if (!repo) return ok(null);
+    if (!installation || installation.status !== "ACTIVE") return ok(null);
+
+    const repository = await prisma.repository.upsert({
+      where: {
+        installationId_githubRepoId: {
+          installationId: installation.id,
+          githubRepoId: input.githubRepoId,
+        },
+      },
+      update: { fullName: input.fullName },
+      create: {
+        installationId: installation.id,
+        githubRepoId: input.githubRepoId,
+        fullName: input.fullName,
+      },
+      select: { id: true, isEnabled: true },
+    });
     return ok({
-      id: repo.id as RepositoryId,
-      installationId: repo.installationId as InstallationId,
+      id: repository.id as RepositoryId,
+      isEnabled: repository.isEnabled,
     });
   } catch (error) {
     const message =
