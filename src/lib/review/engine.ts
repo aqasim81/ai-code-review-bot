@@ -4,7 +4,7 @@ import {
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
-  findRepositoryByFullName,
+  findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
   saveReviewFindings,
@@ -62,9 +62,13 @@ function parseRepositoryFullNameAsResult(
 }
 
 async function lookupRepository(
-  repositoryFullName: string,
+  request: ReviewRequest,
 ): Promise<Result<RepositoryId, ReviewEngineError>> {
-  const repoResult = await findRepositoryByFullName(repositoryFullName);
+  const repoResult = await findOrCreateRepositoryForReview({
+    githubInstallationId: request.installationId,
+    githubRepoId: request.githubRepoId,
+    fullName: request.repositoryFullName,
+  });
   if (!repoResult.success) {
     logger.error("Failed to look up repository", {
       error: repoResult.error,
@@ -72,10 +76,19 @@ async function lookupRepository(
     return err("REVIEW_DB_ERROR");
   }
   if (!repoResult.data) {
-    logger.error("Repository not found or disabled", {
-      repository: repositoryFullName,
+    // Also covers a missed installation.created webhook, so keep it visible.
+    logger.warn("Repository not reviewable, skipping", {
+      repository: request.repositoryFullName,
+      githubInstallationId: request.installationId,
+      reason: "installation unknown or inactive, or repository removed",
     });
-    return err("REVIEW_DB_ERROR");
+    return err("REVIEW_REPOSITORY_UNAVAILABLE");
+  }
+  if (!repoResult.data.isEnabled) {
+    logger.info("Reviews are disabled for this repository, skipping", {
+      repository: request.repositoryFullName,
+    });
+    return err("REVIEW_REPOSITORY_UNAVAILABLE");
   }
   return ok(repoResult.data.id);
 }
@@ -757,7 +770,7 @@ export async function executeReview(
     commitSha: request.commitSha,
   });
 
-  const repositoryResult = await lookupRepository(request.repositoryFullName);
+  const repositoryResult = await lookupRepository(request);
   if (!repositoryResult.success) return repositoryResult;
 
   const claimResult = await claimReviewRecord(repositoryResult.data, request);

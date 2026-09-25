@@ -42,11 +42,13 @@ const SCOPE: AccessScope = {
 
 const IN_SCOPE = {
   githubRepoId: { in: [1, 2] },
+  removedAt: null,
   installation: { githubInstallationId: { in: [10] }, status: "ACTIVE" },
 };
 
 const MANAGEABLE = {
   githubRepoId: { in: [1] },
+  removedAt: null,
   installation: { githubInstallationId: { in: [10] }, status: "ACTIVE" },
 };
 
@@ -95,6 +97,7 @@ describe("dashboard queries are limited to the user's access scope", () => {
 
     expect(whereOf(prismaMock.repository.findMany)).toEqual({
       githubRepoId: { in: [] },
+      removedAt: null,
       installation: { githubInstallationId: { in: [] }, status: "ACTIVE" },
     });
   });
