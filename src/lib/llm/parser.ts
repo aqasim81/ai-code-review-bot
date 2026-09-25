@@ -121,7 +121,7 @@ function validateFinding(raw: unknown): ReviewFinding | null {
       ? obj.filePath
       : null;
   const lineNumber = isValidLineNumber(obj.lineNumber) ? obj.lineNumber : null;
-  const message = withoutNulCharacters(obj.message);
+  const message = withoutNulCharacters(obj.message) || null;
   const suggestion = withoutNulCharacters(obj.suggestion);
   const confidence =
     typeof obj.confidence === "number" &&

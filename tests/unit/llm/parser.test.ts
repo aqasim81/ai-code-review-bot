@@ -192,7 +192,7 @@ describe("parseLlmReviewResponse", () => {
     expect(result.data.map((item) => item.lineNumber)).toEqual([7]);
   });
 
-  it("removes NUL characters from text and drops findings whose path has one", () => {
+  it("removes NUL characters from text and drops findings with a NUL path or no message left", () => {
     const finding = (filePath: string, message: string) => ({
       filePath,
       lineNumber: 3,
@@ -205,6 +205,7 @@ describe("parseLlmReviewResponse", () => {
     const response = JSON.stringify([
       finding("src/a.ts", "Null\u0000byte in message"),
       finding("src/b\u0000.ts", "Path is not a real file"),
+      finding("src/c.ts", "\u0000\u0000"),
     ]);
 
     const result = parseLlmReviewResponse(response);
