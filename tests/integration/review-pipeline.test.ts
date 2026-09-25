@@ -390,6 +390,28 @@ describe("executeReview — review pipeline", () => {
     );
   });
 
+  it("returns REVIEW_CLAIM_LOST when the post is skipped but completing finds the claim lost", async () => {
+    vi.mocked(markReviewCompleted).mockResolvedValue(ok(false));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      findPostedReview: vi.fn().mockResolvedValue(ok({ githubReviewId: 7 })),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_CLAIM_LOST");
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).not.toHaveBeenCalled();
+  });
+
   it("fails the review without posting when the existing-review lookup fails", async () => {
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi

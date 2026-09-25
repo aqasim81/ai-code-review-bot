@@ -55,14 +55,17 @@ retryable with the old order would have allowed a retry to post the same comment
 - Every posted review body ends with a hidden marker, `<!-- code-review-bot:review=<reviewId> -->`.
   The review ID stays the same across retries and reclaims. Before posting, the engine lists the
   PR's reviews (`GitHubService.findPostedReview`). If the app's bot account already posted one
-  with this marker, the engine does not post again and marks the review COMPLETED. This covers
+  with this marker (the bot login `<slug>[bot]` is read once from `GET /app`, not from
+  configuration, so a wrong `GITHUB_APP_SLUG` cannot make the lookup silently miss), the engine does not post again and marks the review COMPLETED. This covers
   a post that reached GitHub but reported failure, and an attempt that posted and was then
   reclaimed. If the lookup fails, the review is marked FAILED rather than risking a duplicate.
   *(Added for #22.)* When the post is skipped, the findings saved by the current attempt are
   kept; they can differ slightly from the ones in the earlier post.
-- Known gap: two attempts that both run the lookup before either posts can still both post. This
-  needs two live attempts on one review within the same few seconds, and the claim token makes
-  that rare.
+- Known gap: two attempts that both run the lookup before either posts can still both post. The
+  claim token does not prevent that. It is rare because a live review can only be taken over by
+  a retry of the same job after it lost its BullMQ lock, or by another job after the 30-minute
+  stale cutoff, and the two attempts would then have to reach the post within seconds of each
+  other.
 - Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
   commit is recorded as completed. Nothing reclaims the review until a job arrives after the
   30-minute cutoff.
