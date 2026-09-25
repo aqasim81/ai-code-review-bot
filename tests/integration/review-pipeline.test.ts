@@ -369,6 +369,7 @@ describe("executeReview — review pipeline", () => {
     ["GITHUB_REQUEST_REJECTED", "REVIEW_DIFF_UNAVAILABLE"],
     ["GITHUB_RATE_LIMITED", "REVIEW_GITHUB_RATE_LIMITED"],
     ["GITHUB_AUTH_FAILED", "REVIEW_DIFF_FETCH_FAILED"],
+    ["GITHUB_INSTALLATION_UNAVAILABLE", "REVIEW_REPOSITORY_UNAVAILABLE"],
   ])(
     "reports a diff fetch that failed with %s as %s",
     async (githubError, expected) => {
@@ -417,6 +418,7 @@ describe("executeReview — review pipeline", () => {
     ["GITHUB_NOT_FOUND", "REVIEW_POST_REJECTED"],
     ["GITHUB_RATE_LIMITED", "REVIEW_GITHUB_RATE_LIMITED"],
     ["GITHUB_UNKNOWN_ERROR", "REVIEW_POST_FAILED"],
+    ["GITHUB_INSTALLATION_UNAVAILABLE", "REVIEW_REPOSITORY_UNAVAILABLE"],
   ])(
     "reports a post that failed with %s as %s",
     async (githubError, expected) => {
