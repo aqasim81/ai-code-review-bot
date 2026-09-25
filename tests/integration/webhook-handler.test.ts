@@ -152,6 +152,31 @@ describe("handleInstallationCreated", () => {
       [],
     );
   });
+
+  it("records an Enterprise installation as ENTERPRISE, using its slug as the login", async () => {
+    vi.mocked(createInstallationWithRepositories).mockResolvedValueOnce(
+      ok({ id: installationId("inst-1"), repositoryCount: 0 }),
+    );
+
+    await handleInstallationCreated(
+      createPayload({
+        installation: {
+          id: 12345,
+          account: { name: "Acme Corporation", slug: "acme" },
+        },
+        repositories: [],
+      }),
+    );
+
+    expect(createInstallationWithRepositories).toHaveBeenCalledWith(
+      {
+        githubInstallationId: 12345,
+        githubAccountLogin: "acme",
+        githubAccountType: "ENTERPRISE",
+      },
+      [],
+    );
+  });
 });
 
 describe("handleInstallationDeleted", () => {

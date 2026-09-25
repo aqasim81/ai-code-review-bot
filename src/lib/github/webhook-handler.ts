@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AccountType } from "@/generated/prisma/enums";
 import {
   createInstallationWithRepositories,
   markInstallationDeleted,
@@ -24,7 +25,7 @@ const repositoryFullNameSchema = z
 
 const installationAccountSchema = z.union([
   z.object({ login: z.string().min(1), type: z.string().optional() }),
-  z.object({ name: z.string().min(1), slug: z.string() }),
+  z.object({ name: z.string().min(1), slug: z.string().min(1) }),
 ]);
 
 const installationCreatedPayloadSchema = z.object({
@@ -94,6 +95,22 @@ function selectWellFormedRepositories(
   });
 }
 
+/**
+ * User and organization accounts have a login; Enterprise accounts have a
+ * display name and a slug instead, and the slug is their stable identifier.
+ */
+function describeInstallationAccount(
+  account: z.infer<typeof installationAccountSchema>,
+): { accountLogin: string; accountType: AccountType } {
+  if (!("login" in account)) {
+    return { accountLogin: account.slug, accountType: "ENTERPRISE" };
+  }
+  return {
+    accountLogin: account.login,
+    accountType: account.type === "Organization" ? "ORG" : "USER",
+  };
+}
+
 export async function handleInstallationCreated(
   payload: unknown,
 ): Promise<Result<{ installationId: string }, WebhookHandlerError>> {
@@ -106,11 +123,7 @@ export async function handleInstallationCreated(
   const { installation, sender } = parsed.data;
   const account = installation.account;
 
-  const accountLogin = "login" in account ? account.login : account.name;
-  const accountType =
-    "type" in account && account.type === "Organization"
-      ? ("ORG" as const)
-      : ("USER" as const);
+  const { accountLogin, accountType } = describeInstallationAccount(account);
 
   logger.info("Processing installation.created event", {
     githubInstallationId: installation.id,
