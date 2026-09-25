@@ -1,7 +1,7 @@
 import { Octokit } from "@octokit/rest";
 
 const GITHUB_REQUEST_TIMEOUT_MS = 60_000;
-const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 204, 205, 304]);
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 
 /**
  * Fetches with a timeout that covers the body as well as the headers. The body
