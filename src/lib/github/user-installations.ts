@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import { describeError } from "@/lib/errors";
 import type { UserAccess } from "@/types/access";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
@@ -95,7 +96,8 @@ export async function fetchUserRepositoryAccess(
       truncated,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return err(`Failed to fetch user repository access: ${message}`);
+    return err(
+      `Failed to fetch user repository access: ${describeError(error)}`,
+    );
   }
 }

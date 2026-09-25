@@ -1,4 +1,5 @@
 import { Queue, Worker } from "bullmq";
+import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import {
@@ -27,7 +28,7 @@ function startStaleReviewSweep(): NodeJS.Timeout {
     expireStaleReviews()
       .catch((error: unknown) => {
         logger.error("Stale review sweep crashed", {
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       })
       .finally(() => {
@@ -67,7 +68,7 @@ async function moveToDeadLetterQueue(
   } catch (dlqError) {
     logger.error("Failed to move job to dead letter queue", {
       jobId,
-      error: dlqError instanceof Error ? dlqError.message : String(dlqError),
+      error: describeError(dlqError),
     });
   }
 }
@@ -188,10 +189,7 @@ async function main(): Promise<void> {
       logger.info("Worker closed gracefully");
     } catch (shutdownError) {
       logger.error("Shutdown failed", {
-        error:
-          shutdownError instanceof Error
-            ? shutdownError.message
-            : String(shutdownError),
+        error: describeError(shutdownError),
       });
       process.exit(1);
     }
@@ -206,7 +204,7 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   logger.error("Worker failed to start", {
-    error: error instanceof Error ? error.message : String(error),
+    error: describeError(error),
   });
   process.exit(1);
 });

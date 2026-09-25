@@ -9,6 +9,7 @@ import { createLlmClient } from "@/lib/llm/client";
 import { logger } from "@/lib/logger";
 import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
+import { exponentialDelayMs } from "@/lib/retry";
 import { executeReview } from "@/lib/review/engine";
 import type { ReviewEngineError } from "@/types/errors";
 import type { GitHubService } from "@/types/github";
@@ -318,9 +319,7 @@ export function calculateBackoffDelay(
   if (error?.name === GITHUB_RATE_LIMITED_ERROR_NAME) {
     return GITHUB_RATE_LIMIT_RETRY_DELAY_MS;
   }
-  const BASE_DELAY_MS = 10_000;
-  const MULTIPLIER = 3;
-  return BASE_DELAY_MS * MULTIPLIER ** (attemptsMade - 1);
+  return exponentialDelayMs(10_000, 3, attemptsMade);
 }
 
 /**

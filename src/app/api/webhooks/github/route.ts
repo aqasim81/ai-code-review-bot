@@ -1,6 +1,7 @@
 import { Webhooks } from "@octokit/webhooks";
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
+import { describeError } from "@/lib/errors";
 import {
   handleInstallationCreated,
   handleInstallationDeleted,
@@ -159,7 +160,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     return NextResponse.json({ received: true, ...result.data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = describeError(error, "Unknown error");
     logger.error("Unexpected error processing webhook", {
       error: message,
       deliveryId,

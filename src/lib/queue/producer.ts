@@ -1,4 +1,5 @@
 import { type Job, Queue } from "bullmq";
+import { describeError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
 import type { ReviewJobData, ReviewJobPayload } from "@/lib/queue/types";
@@ -88,7 +89,7 @@ async function enqueueJob(
   } catch (error) {
     logger.error("Failed to enqueue review job", {
       ...logContext,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     return err("QUEUE_ENQUEUE_FAILED");
   }

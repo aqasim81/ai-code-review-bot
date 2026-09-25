@@ -9,6 +9,7 @@ import {
   markReviewCompleted,
   saveReviewFindings,
 } from "@/lib/db/queries";
+import { describeError } from "@/lib/errors";
 import { buildReviewMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
@@ -316,10 +317,7 @@ async function fetchFileContentsForDiff(
   for (const result of results) {
     if (result.status === "rejected") {
       logger.warn("Unexpected error fetching file content", {
-        error:
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason),
+        error: describeError(result.reason),
       });
     }
   }
@@ -812,7 +810,7 @@ async function runReviewStepsWithFailureGuard(
       reviewId: context.claim.reviewId,
       repository: context.request.repositoryFullName,
       pullRequest: context.request.pullRequestNumber,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     await markReviewFailed(context.claim, "Unexpected error during review");
     return err("REVIEW_UNEXPECTED_ERROR");

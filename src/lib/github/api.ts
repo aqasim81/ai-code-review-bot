@@ -1,16 +1,12 @@
 import { createSign } from "node:crypto";
 import { Octokit } from "@octokit/rest";
 import { env } from "@/lib/env";
+import { describeError } from "@/lib/errors";
 import { selectReviewWithMarker } from "@/lib/github/review-marker";
 import { logger } from "@/lib/logger";
+import { sleep } from "@/lib/retry";
 import type { GitHubError } from "@/types/errors";
-import type {
-  CommitComparisonFileStatus,
-  CommitComparisonResult,
-  GitHubService,
-  PostedReviewResult,
-  PullRequestReviewPayload,
-} from "@/types/github";
+import type { CommitComparisonFileStatus, GitHubService } from "@/types/github";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
@@ -59,7 +55,7 @@ async function getAppBotLogin(
     return ok(cachedAppBotLogin);
   } catch (error) {
     logger.error("Failed to look up the GitHub App", {
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     return err(classifyGitHubError(error));
   }
@@ -81,7 +77,7 @@ async function createInstallationAccessToken(
   } catch (error) {
     logger.error("Failed to create installation access token", {
       installationId,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     return err("GITHUB_AUTH_FAILED");
   }
@@ -147,7 +143,7 @@ async function checkRateLimit(octokit: Octokit): Promise<void> {
       const waitMs = Math.min(resetAt - Date.now(), RATE_LIMIT_PAUSE_MS);
       if (waitMs > 0) {
         logger.warn("Rate limit low, pausing", { remaining, waitMs });
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        await sleep(waitMs);
       }
     }
   } catch {
@@ -201,234 +197,154 @@ function createGitHubService(
     return ok(new Octokit({ auth: cachedToken }));
   }
 
+  /**
+   * Runs one request with a fresh token. A 401 drops the cached token; every
+   * failure is logged and classified.
+   */
+  async function callGitHub<T>(
+    failureMessage: string,
+    logContext: Record<string, unknown>,
+    request: (octokit: Octokit) => Promise<Result<T, GitHubError>>,
+    options: { readonly rateLimitCheck: boolean } = { rateLimitCheck: true },
+  ): Promise<Result<T, GitHubError>> {
+    const octokitResult = await getOctokit();
+    if (!octokitResult.success) return octokitResult;
+    const octokit = octokitResult.data;
+
+    try {
+      if (options.rateLimitCheck) await checkRateLimit(octokit);
+      return await request(octokit);
+    } catch (error) {
+      if (isAuthError(error)) clearToken();
+      logger.error(failureMessage, {
+        ...logContext,
+        error: describeError(error),
+      });
+      return err(classifyGitHubError(error));
+    }
+  }
+
   return {
-    async fetchPullRequestDiff(
-      owner: string,
-      repo: string,
-      pullNumber: number,
-    ): Promise<Result<string, GitHubError>> {
-      const octokitResult = await getOctokit();
-      if (!octokitResult.success) return octokitResult;
-      const octokit = octokitResult.data;
-
-      try {
-        await checkRateLimit(octokit);
-
-        const response = await octokit.pulls.get({
-          owner,
-          repo,
-          pull_number: pullNumber,
-          mediaType: { format: "diff" },
-        });
-
-        // Octokit types don't account for diff mediaType returning a string
-        const diff = response.data as unknown;
-        if (typeof diff !== "string") {
-          return err("GITHUB_UNKNOWN_ERROR");
-        }
-        return ok(diff);
-      } catch (error) {
-        if (isAuthError(error)) {
-          clearToken();
-        }
-        logger.error("Failed to fetch PR diff", {
-          owner,
-          repo,
-          pullNumber,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return err(classifyGitHubError(error));
-      }
+    fetchPullRequestDiff(owner, repo, pullNumber) {
+      return callGitHub(
+        "Failed to fetch PR diff",
+        { owner, repo, pullNumber },
+        async (octokit) => {
+          const response = await octokit.pulls.get({
+            owner,
+            repo,
+            pull_number: pullNumber,
+            mediaType: { format: "diff" },
+          });
+          // Octokit types don't account for diff mediaType returning a string
+          const diff = response.data as unknown;
+          return typeof diff === "string"
+            ? ok(diff)
+            : err("GITHUB_UNKNOWN_ERROR");
+        },
+      );
     },
 
-    async fetchFileContent(
-      owner: string,
-      repo: string,
-      filePath: string,
-      ref: string,
-    ): Promise<Result<string, GitHubError>> {
-      const octokitResult = await getOctokit();
-      if (!octokitResult.success) return octokitResult;
-      const octokit = octokitResult.data;
-
-      try {
-        const response = await octokit.repos.getContent({
-          owner,
-          repo,
-          path: filePath,
-          ref,
-        });
-
-        const data = response.data;
-        if (Array.isArray(data) || data.type !== "file") {
-          return err("GITHUB_NOT_FOUND");
-        }
-        // For files over 1 MB GitHub returns encoding "none" and no content.
-        if (data.encoding !== "base64") {
-          return err("GITHUB_CONTENT_TOO_LARGE");
-        }
-
-        const content = Buffer.from(data.content, "base64").toString("utf-8");
-        return ok(content);
-      } catch (error) {
-        if (isAuthError(error)) {
-          clearToken();
-        }
-        logger.error("Failed to fetch file content", {
-          owner,
-          repo,
-          filePath,
-          ref,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return err(classifyGitHubError(error));
-      }
+    fetchFileContent(owner, repo, filePath, ref) {
+      return callGitHub(
+        "Failed to fetch file content",
+        { owner, repo, filePath, ref },
+        async (octokit) => {
+          const { data } = await octokit.repos.getContent({
+            owner,
+            repo,
+            path: filePath,
+            ref,
+          });
+          if (Array.isArray(data) || data.type !== "file") {
+            return err("GITHUB_NOT_FOUND");
+          }
+          // For files over 1 MB GitHub returns encoding "none" and no content.
+          if (data.encoding !== "base64") {
+            return err("GITHUB_CONTENT_TOO_LARGE");
+          }
+          return ok(Buffer.from(data.content, "base64").toString("utf-8"));
+        },
+        { rateLimitCheck: false },
+      );
     },
 
-    async postPullRequestReview(
-      owner: string,
-      repo: string,
-      pullNumber: number,
-      review: PullRequestReviewPayload,
-    ): Promise<Result<PostedReviewResult, GitHubError>> {
-      const octokitResult = await getOctokit();
-      if (!octokitResult.success) return octokitResult;
-      const octokit = octokitResult.data;
-
-      try {
-        await checkRateLimit(octokit);
-
-        const comments = review.comments.map((comment) => ({
-          path: comment.path,
-          line: comment.line,
-          side: comment.side,
-          body: comment.body,
-        }));
-
-        const response = await octokit.pulls.createReview({
-          owner,
-          repo,
-          pull_number: pullNumber,
-          commit_id: review.commitSha,
-          body: review.body,
-          event: review.event,
-          comments,
-        });
-
-        logger.info("Posted review to GitHub", {
-          owner,
-          repo,
-          pullNumber,
-          reviewId: response.data.id,
-          commentCount: comments.length,
-        });
-
-        return ok({
-          githubReviewId: response.data.id,
-          postedCommentCount: comments.length,
-        });
-      } catch (error) {
-        if (isAuthError(error)) {
-          clearToken();
-        }
-        logger.error("Failed to post review", {
-          owner,
-          repo,
-          pullNumber,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return err(classifyGitHubError(error));
-      }
+    postPullRequestReview(owner, repo, pullNumber, review) {
+      return callGitHub(
+        "Failed to post review",
+        { owner, repo, pullNumber },
+        async (octokit) => {
+          const response = await octokit.pulls.createReview({
+            owner,
+            repo,
+            pull_number: pullNumber,
+            commit_id: review.commitSha,
+            body: review.body,
+            event: review.event,
+            comments: [...review.comments],
+          });
+          const postedCommentCount = review.comments.length;
+          logger.info("Posted review to GitHub", {
+            owner,
+            repo,
+            pullNumber,
+            reviewId: response.data.id,
+            commentCount: postedCommentCount,
+          });
+          return ok({ githubReviewId: response.data.id, postedCommentCount });
+        },
+      );
     },
 
-    async findPostedReview(
-      owner: string,
-      repo: string,
-      pullNumber: number,
-      marker: string,
-    ): Promise<Result<{ githubReviewId: number } | null, GitHubError>> {
+    async findPostedReview(owner, repo, pullNumber, marker) {
       const botLoginResult = await getAppBotLogin(credentials);
       if (!botLoginResult.success) return botLoginResult;
-      const octokitResult = await getOctokit();
-      if (!octokitResult.success) return octokitResult;
-      const octokit = octokitResult.data;
 
-      try {
-        await checkRateLimit(octokit);
-
-        const reviews = await octokit.paginate(octokit.pulls.listReviews, {
-          owner,
-          repo,
-          pull_number: pullNumber,
-          per_page: 100,
-        });
-
-        return ok(
-          selectReviewWithMarker(
-            reviews.map((review) => ({
-              id: review.id,
-              body: review.body,
-              user: review.user
-                ? { login: review.user.login, type: review.user.type }
-                : null,
-            })),
-            marker,
-            botLoginResult.data,
-          ),
-        );
-      } catch (error) {
-        if (isAuthError(error)) {
-          clearToken();
-        }
-        logger.error("Failed to list pull request reviews", {
-          owner,
-          repo,
-          pullNumber,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return err(classifyGitHubError(error));
-      }
+      return callGitHub(
+        "Failed to list pull request reviews",
+        { owner, repo, pullNumber },
+        async (octokit) => {
+          const reviews = await octokit.paginate(octokit.pulls.listReviews, {
+            owner,
+            repo,
+            pull_number: pullNumber,
+            per_page: 100,
+          });
+          return ok(
+            selectReviewWithMarker(
+              reviews.map((review) => ({
+                id: review.id,
+                body: review.body,
+                user: review.user
+                  ? { login: review.user.login, type: review.user.type }
+                  : null,
+              })),
+              marker,
+              botLoginResult.data,
+            ),
+          );
+        },
+      );
     },
 
-    async compareCommits(
-      owner: string,
-      repo: string,
-      baseSha: string,
-      headSha: string,
-    ): Promise<Result<CommitComparisonResult, GitHubError>> {
-      const octokitResult = await getOctokit();
-      if (!octokitResult.success) return octokitResult;
-      const octokit = octokitResult.data;
-
-      try {
-        await checkRateLimit(octokit);
-
-        const response = await octokit.repos.compareCommits({
-          owner,
-          repo,
-          base: baseSha,
-          head: headSha,
-        });
-
-        const files = (response.data.files ?? []).map((file) => ({
-          filename: file.filename,
-          status: (file.status ?? "modified") as CommitComparisonFileStatus,
-        }));
-
-        return ok({ status: response.data.status, files });
-      } catch (error) {
-        if (isAuthError(error)) {
-          clearToken();
-        }
-        logger.error("Failed to compare commits", {
-          owner,
-          repo,
-          baseSha,
-          headSha,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return err(classifyGitHubError(error));
-      }
+    compareCommits(owner, repo, baseSha, headSha) {
+      return callGitHub(
+        "Failed to compare commits",
+        { owner, repo, baseSha, headSha },
+        async (octokit) => {
+          const response = await octokit.repos.compareCommits({
+            owner,
+            repo,
+            base: baseSha,
+            head: headSha,
+          });
+          const files = (response.data.files ?? []).map((file) => ({
+            filename: file.filename,
+            status: (file.status ?? "modified") as CommitComparisonFileStatus,
+          }));
+          return ok({ status: response.data.status, files });
+        },
+      );
     },
   };
 }
