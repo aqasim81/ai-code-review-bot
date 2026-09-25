@@ -45,7 +45,16 @@ async function authorizeRepositoryManagement(
   if (!session) return UNAUTHORIZED;
 
   const repo = await findAccessibleRepositoryById(repositoryId, session.access);
-  if (!repo.success || !repo.data) return UNAUTHORIZED;
+  // A failed lookup says nothing about access: report a save the user can
+  // retry, not a refusal.
+  if (!repo.success) {
+    logger.error("Failed to look up repository for a change", {
+      repositoryId,
+      error: repo.error,
+    });
+    return SAVE_FAILED;
+  }
+  if (!repo.data) return UNAUTHORIZED;
   if (!canManageRepository(session.access, repo.data.githubRepoId)) {
     return FORBIDDEN;
   }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { NoInstallationsCard } from "@/components/dashboard/no-installations-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ReviewFilters } from "@/components/dashboard/review-filters";
@@ -17,6 +18,7 @@ import {
   listReviewsInScope,
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
+import { loadedDataOrLogFailures } from "../loaded-data";
 
 interface ReviewsPageProps {
   searchParams: Promise<{
@@ -52,7 +54,22 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
     }),
   ]);
 
-  if (!installationsResult.success || installationsResult.data.length === 0) {
+  const loaded = loadedDataOrLogFailures("reviews", {
+    installations: installationsResult,
+    repos: reposResult,
+    reviews: reviewsResult,
+  });
+  if (!loaded) {
+    return (
+      <div>
+        <PageHeader title="Reviews" />
+        <LoadFailedCard what="your reviews" />
+      </div>
+    );
+  }
+  const { installations, repos, reviews: reviewData } = loaded;
+
+  if (installations.length === 0) {
     return (
       <div>
         <PageHeader title="Reviews" />
@@ -60,11 +77,6 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
       </div>
     );
   }
-
-  const repos = reposResult.success ? reposResult.data : [];
-  const reviewData = reviewsResult.success
-    ? reviewsResult.data
-    : { reviews: [], nextCursor: null };
 
   return (
     <div>

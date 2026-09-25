@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/auth";
+import { LoadFailedCard } from "@/components/dashboard/load-failed-card";
 import { NoInstallationsCard } from "@/components/dashboard/no-installations-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RepositoryList } from "@/components/dashboard/repository-list";
@@ -9,6 +10,7 @@ import {
   listRepositoriesInScope,
 } from "@/lib/db/queries";
 import { canManageRepository } from "@/lib/github/repository-access";
+import { loadedDataOrLogFailures } from "../loaded-data";
 
 export default async function RepositoriesPage() {
   const session = await getSession();
@@ -21,27 +23,29 @@ export default async function RepositoriesPage() {
     listRepositoriesInScope(session.access),
   ]);
 
-  if (!installationsResult.success) {
+  const loaded = loadedDataOrLogFailures("repositories", {
+    installations: installationsResult,
+    repositories: reposResult,
+  });
+  if (!loaded) {
     return (
       <div>
         <PageHeader title="Repositories" />
-        <p className="text-destructive">Failed to load installations.</p>
+        <LoadFailedCard what="your repositories" />
       </div>
     );
   }
 
-  const repositories = reposResult.success ? reposResult.data : [];
-  const installationsWithRepos = installationsResult.data.map(
-    (installation) => ({
-      installation,
-      repositories: repositories
-        .filter((repo) => repo.installationId === installation.id)
-        .map((repo) => ({
-          ...repo,
-          canManage: canManageRepository(session.access, repo.githubRepoId),
-        })),
-    }),
-  );
+  const { installations, repositories } = loaded;
+  const installationsWithRepos = installations.map((installation) => ({
+    installation,
+    repositories: repositories
+      .filter((repo) => repo.installationId === installation.id)
+      .map((repo) => ({
+        ...repo,
+        canManage: canManageRepository(session.access, repo.githubRepoId),
+      })),
+  }));
 
   return (
     <div>
