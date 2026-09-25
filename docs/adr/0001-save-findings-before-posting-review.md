@@ -66,9 +66,14 @@ retryable with the old order would have allowed a retry to post the same comment
   a retry of the same job after it lost its BullMQ lock, or by another job after the 30-minute
   stale cutoff, and the two attempts would then have to reach the post within seconds of each
   other.
-- Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
-  commit is recorded as completed. Nothing reclaims the review until a job arrives after the
-  30-minute cutoff.
+- The worker runs a sweep (`expireStaleReviews`, at startup and every 5 minutes) that marks
+  reviews unfinished past the 30-minute cutoff as FAILED. It drops their unposted findings and
+  clears their claim token, so an attempt that is somehow still running can no longer write.
+  Each expiry is a guarded, per-review update, so a review reclaimed at the same moment is left
+  alone and running the sweep in several workers is safe. *(Added for #30.)*
+- Known gap: an expired review is not re-run automatically. The dashboard shows it as FAILED, and
+  the next trigger for that commit (a push or reopen) reclaims it. Re-enqueueing from the sweep
+  was left out to avoid retrying a review that keeps crashing the worker in a loop.
 - `githubCommentId` on review comments is still never filled in.
 
 ## Alternatives considered
