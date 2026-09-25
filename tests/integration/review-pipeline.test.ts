@@ -22,6 +22,7 @@ import {
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
+  markReviewSuperseded,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
@@ -76,6 +77,7 @@ function setupSuccessfulDbMocks() {
   vi.mocked(saveReviewFindings).mockResolvedValue(ok(true));
   vi.mocked(isReviewClaimCurrent).mockResolvedValue(ok(true));
   vi.mocked(markReviewCompleted).mockResolvedValue(ok(true));
+  vi.mocked(markReviewSuperseded).mockResolvedValue(ok(true));
   vi.mocked(claimExistingReview).mockImplementation(async (id) =>
     ok({ reviewId: id, claimToken: "retry-token" }),
   );
@@ -1151,6 +1153,103 @@ describe("executeReview — review pipeline", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
+  });
+});
+
+describe("executeReview — superseded commits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithHead(headSha: string) {
+    return createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      fetchPullRequestHeadSha: vi.fn().mockResolvedValue(ok(headSha)),
+    });
+  }
+
+  it("does not post or complete a review of a commit newer pushes replaced", async () => {
+    const github = githubWithHead("newer-commit-sha");
+
+    const result = await executeReview(
+      createReviewRequest({ commitSha: "abc123def456" }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(github.fetchPullRequestHeadSha).toHaveBeenCalledWith(
+      "test-owner",
+      "test-repo",
+      42,
+    );
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(markReviewCompleted).not.toHaveBeenCalled();
+    expect(markReviewSuperseded).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      expect.stringContaining("newer commits"),
+      expect.any(Number),
+    );
+    expect(failReview).not.toHaveBeenCalled();
+  });
+
+  it("fails the review, without posting, when the head cannot be fetched", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      fetchPullRequestHeadSha: vi
+        .fn()
+        .mockResolvedValue(err("GITHUB_RATE_LIMITED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_GITHUB_RATE_LIMITED",
+    });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).toHaveBeenCalled();
+  });
+
+  it("stops without writing when the claim is lost before marking it superseded", async () => {
+    vi.mocked(markReviewSuperseded).mockResolvedValue(ok(false));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      fetchPullRequestHeadSha: vi.fn().mockResolvedValue(ok("newer-sha")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({ success: false, error: "REVIEW_CLAIM_LOST" });
+  });
+
+  it("posts the review when the commit is still the pull request's head", async () => {
+    const github = githubWithHead("abc123def456");
+
+    const result = await executeReview(
+      createReviewRequest({ commitSha: "abc123def456" }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+    expect(markReviewCompleted).toHaveBeenCalled();
   });
 });
 

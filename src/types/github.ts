@@ -61,6 +61,13 @@ export interface GitHubService {
     review: PullRequestReviewPayload,
   ): Promise<Result<PostedReviewResult, GitHubError>>;
 
+  /** The SHA of the pull request's current head commit. */
+  fetchPullRequestHeadSha(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+  ): Promise<Result<string, GitHubError>>;
+
   /** Finds this bot's review on the PR carrying `marker`, if one was posted. */
   findPostedReview(
     owner: string,

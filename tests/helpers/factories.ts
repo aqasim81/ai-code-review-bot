@@ -250,6 +250,9 @@ export function createMockGitHubService(
           postedCommentCount: 1,
         } satisfies PostedReviewResult),
       ),
+    fetchPullRequestHeadSha: vi
+      .fn<GitHubService["fetchPullRequestHeadSha"]>()
+      .mockResolvedValue(ok(createReviewRequest().commitSha)),
     findPostedReview: vi
       .fn<GitHubService["findPostedReview"]>()
       .mockResolvedValue(ok(null)),

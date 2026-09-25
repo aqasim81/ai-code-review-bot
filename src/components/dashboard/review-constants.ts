@@ -30,4 +30,5 @@ export const STATUS_VARIANT: Record<
   FAILED: "destructive",
   PROCESSING: "secondary",
   PENDING: "outline",
+  SUPERSEDED: "outline",
 };

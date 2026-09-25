@@ -7,6 +7,7 @@ import {
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
+  markReviewSuperseded,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { describeError } from "@/lib/errors";
@@ -570,10 +571,46 @@ async function wasPostedByEarlierAttempt(
   return ok(lookupResult.data !== null);
 }
 
+/**
+ * Whether the review's commit is still the pull request's head. A delayed job
+ * can run after newer pushes, and its review must not be posted then.
+ */
+async function isCommitStillHead(
+  context: ReviewStepsContext,
+): Promise<Result<boolean, StepFailure>> {
+  const { githubService, owner, repo, request, claim } = context;
+  const headResult = await githubService.fetchPullRequestHeadSha(
+    owner,
+    repo,
+    request.pullRequestNumber,
+  );
+  if (!headResult.success) {
+    logger.error("Failed to fetch the pull request head", {
+      reviewId: claim.reviewId,
+      error: headResult.error,
+    });
+    return stepFailed(
+      reviewErrorForGitHubFailure(headResult.error, "post"),
+      "Failed to fetch the pull request head",
+    );
+  }
+  if (headResult.data !== request.commitSha) {
+    logger.info("Newer commits were pushed, not posting the review", {
+      reviewId: claim.reviewId,
+      commitSha: request.commitSha,
+      headSha: headResult.data,
+    });
+    return ok(false);
+  }
+  return ok(true);
+}
+
+type PostOutcome = "posted" | "superseded";
+
 async function postReviewToGitHub(
   context: ReviewStepsContext,
   payload: PullRequestReviewPayload,
-): Promise<Result<void, StepFailure>> {
+): Promise<Result<PostOutcome, StepFailure>> {
   const { githubService, owner, repo, request, claim } = context;
   const claimCheck = requireClaimedWrite(
     await isReviewClaimCurrent(claim),
@@ -586,7 +623,11 @@ async function postReviewToGitHub(
   const marker = buildReviewMarker(claim.reviewId);
   const earlierPost = await wasPostedByEarlierAttempt(context, marker);
   if (!earlierPost.success) return earlierPost;
-  if (earlierPost.data) return ok(undefined);
+  if (earlierPost.data) return ok("posted");
+
+  const headCheck = await isCommitStillHead(context);
+  if (!headCheck.success) return headCheck;
+  if (!headCheck.data) return ok("superseded");
 
   const postResult = await githubService.postPullRequestReview(
     owner,
@@ -610,7 +651,30 @@ async function postReviewToGitHub(
     githubReviewId: postResult.data.githubReviewId,
     postedComments: postResult.data.postedCommentCount,
   });
-  return ok(undefined);
+  return ok("posted");
+}
+
+const SUPERSEDED_SUMMARY =
+  "Not posted: newer commits were pushed to the pull request.";
+
+async function completeSupersededReview(
+  claim: ReviewClaimRef,
+  startTime: number,
+): Promise<Result<ReviewEngineResult, StepFailure>> {
+  const processingTimeMs = Date.now() - startTime;
+  const writeResult = requireClaimedWrite(
+    await markReviewSuperseded(claim, SUPERSEDED_SUMMARY, processingTimeMs),
+    claim,
+    "supersede",
+    "Failed to mark review superseded",
+  );
+  if (!writeResult.success) return writeResult;
+  return ok({
+    reviewId: claim.reviewId,
+    issuesFound: 0,
+    processingTimeMs,
+    summary: SUPERSEDED_SUMMARY,
+  });
 }
 
 async function saveFindingsOrFailReview(
@@ -782,6 +846,9 @@ async function analyzeSaveAndPostReview(
 
   const postResult = await postReviewToGitHub(context, review.payload);
   if (!postResult.success) return postResult;
+  if (postResult.data === "superseded") {
+    return completeSupersededReview(claim, startTime);
+  }
 
   const completeResult = await completeReviewOrFail(claim, startTime);
   if (!completeResult.success) return completeResult;
