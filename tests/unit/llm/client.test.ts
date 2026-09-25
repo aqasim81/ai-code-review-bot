@@ -187,7 +187,10 @@ describe("createLlmClient", () => {
     const service = createLlmClient({ apiKey: "test-key" });
     const result = await service.analyzeReviewChunk(createReviewChunk(), "");
 
-    expect(result.success).toBe(true);
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({ truncated: true }),
+    });
     expect(parser.parseTruncatedLlmReviewResponse).toHaveBeenCalledWith(
       '[{"filePath": "src/a.ts"',
       0.7,
@@ -204,8 +207,12 @@ describe("createLlmClient", () => {
     });
 
     const service = createLlmClient({ apiKey: "test-key" });
-    await service.analyzeReviewChunk(createReviewChunk(), "");
+    const result = await service.analyzeReviewChunk(createReviewChunk(), "");
 
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({ truncated: false }),
+    });
     expect(parser.parseLlmReviewResponse).toHaveBeenCalledWith("[]", 0.7);
     expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
   });

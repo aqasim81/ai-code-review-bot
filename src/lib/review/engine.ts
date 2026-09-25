@@ -424,12 +424,14 @@ interface LlmAnalysisResult {
   readonly totalOutputTokens: number;
   /** Files of chunks whose analysis failed while the rest succeeded. */
   readonly unanalyzedFilePaths: readonly string[];
+  /** Files of chunks whose reply was cut off at the output limit. */
+  readonly truncatedFilePaths: readonly string[];
 }
 
 const MAX_LISTED_FILES = 10;
 
-/** A summary note naming skipped files, or null when there are none. */
-function describeSkippedFiles(
+/** A summary note naming files, or null when there are none. */
+function describeFilesNote(
   reason: string,
   filePaths: readonly string[],
 ): string | null {
@@ -481,6 +483,7 @@ async function analyzeAllChunks(
   const allFindings: ReviewFinding[] = [];
   const failedChunkErrors: LLMError[] = [];
   const unanalyzedFilePaths: string[] = [];
+  const truncatedFilePaths: string[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -504,6 +507,9 @@ async function analyzeAllChunks(
     }
 
     allFindings.push(...result.data.findings);
+    if (result.data.truncated) {
+      truncatedFilePaths.push(...chunk.files.map((file) => file.filePath));
+    }
     totalInputTokens += result.data.tokenUsage.inputTokens;
     totalOutputTokens += result.data.tokenUsage.outputTokens;
   }
@@ -516,6 +522,7 @@ async function analyzeAllChunks(
     totalInputTokens,
     totalOutputTokens,
     unanalyzedFilePaths,
+    truncatedFilePaths,
   });
 }
 
@@ -833,7 +840,7 @@ async function runReviewSteps(
     repo,
     request.commitSha,
   );
-  const oversizedNote = describeSkippedFiles(
+  const oversizedNote = describeFilesNote(
     "Not reviewed because they are too large",
     oversizedFilePaths,
   );
@@ -865,14 +872,19 @@ async function analyzeSaveAndPostReview(
   );
   if (!llmResult.success) return llmResult;
   const findings = filterFindingsBySettings(llmResult.data.findings, settings);
-  const failedAnalysisNote = describeSkippedFiles(
+  const failedAnalysisNote = describeFilesNote(
     "Not reviewed because the analysis failed",
     llmResult.data.unanalyzedFilePaths,
+  );
+  const truncatedNote = describeFilesNote(
+    "The review of these files may be incomplete because the analysis hit its output limit",
+    llmResult.data.truncatedFilePaths,
   );
   const summary = [
     describeFindingCount(findings.length),
     oversizedNote,
     failedAnalysisNote,
+    truncatedNote,
   ]
     .filter((note) => note !== null)
     .join("\n\n");
