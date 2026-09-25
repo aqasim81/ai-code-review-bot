@@ -15,7 +15,7 @@ import {
   updateRepositorySettings,
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
-import { ok } from "@/types/results";
+import { err, ok } from "@/types/results";
 
 const REPO_ID = "5f0c6a3e-8b8e-4f7c-9a52-2f6d6f1d2a11";
 const OTHER_REPO_ID = "9b1d2c3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e";
@@ -140,6 +140,43 @@ describe("dashboard repository actions", () => {
 
     expect(result).toEqual({ success: false, error: "Unauthorized" });
     expect(findAccessibleRepositoryById).not.toHaveBeenCalled();
+  });
+
+  it("shows a generic message instead of database detail when saving fails", async () => {
+    vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
+      repositoryWithGithubId(1),
+    );
+    vi.mocked(updateRepositoryEnabled).mockResolvedValue(
+      err(
+        "Failed to update repository: Can't reach database server at db:5432",
+      ),
+    );
+
+    const result = await toggleRepositoryEnabledAction(REPO_ID, true);
+
+    expect(result).toEqual({
+      success: false,
+      error: "Could not save the change. Please try again.",
+    });
+  });
+
+  it("shows a generic message instead of database detail when saving settings fails", async () => {
+    vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
+      repositoryWithGithubId(1),
+    );
+    vi.mocked(updateRepositorySettings).mockResolvedValue(
+      err("Failed to update repository settings: connection refused"),
+    );
+
+    const result = await saveRepositorySettingsAction(
+      REPO_ID,
+      validSettingsForm(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "Could not save the change. Please try again.",
+    });
   });
 
   it("refuses when the scoped update matches no repository", async () => {
