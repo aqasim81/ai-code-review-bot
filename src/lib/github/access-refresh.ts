@@ -56,8 +56,9 @@ function isRefreshDue(state: AccessState, forced: boolean, now: number) {
  * Re-fetches the user's access when it is due. A failed refresh keeps the
  * current access for at most one more interval and then drops it to nothing,
  * so access only ever grows through a successful fetch. A requested refresh
- * that fails stays pending, and is retried within seconds, until it succeeds
- * or fails in a way a retry cannot fix. The state comes from
+ * that fails, or one that fails when the access expires before the next
+ * regular retry, stays pending and is retried within seconds until it
+ * succeeds or fails in a way a retry cannot fix. The state comes from
  * the client's cookie, so limits on how often GitHub is called belong to the
  * fetcher, not to this state.
  */
@@ -84,11 +85,18 @@ export async function refreshAccessState(
       outcome: { kind: "refreshed" },
     };
   }
+  // Access that is gone, or will be before the next regular retry, must not
+  // look like "no installations" while GitHub is failing.
+  const expiresBeforeNextRetry =
+    now + ACCESS_RETRY_INTERVAL_MS - state.fetchedAt >=
+    2 * ACCESS_REFRESH_INTERVAL_MS;
   return {
     state: {
       ...current,
       checkedAt: now,
-      pending: result.error.kind !== "permanent" && (state.pending || forced),
+      pending:
+        result.error.kind !== "permanent" &&
+        (state.pending || forced || expiresBeforeNextRetry),
     },
     outcome: { kind: "failed", error: result.error },
   };
