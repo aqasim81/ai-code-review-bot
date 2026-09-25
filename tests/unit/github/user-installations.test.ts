@@ -26,7 +26,7 @@ describe("fetchUserInstallationIds", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the IDs of installations from every page", async () => {
+  it("maps paginated installations to IDs", async () => {
     const installations = Array.from({ length: 130 }, (_, index) =>
       installation(index + 1),
     );
