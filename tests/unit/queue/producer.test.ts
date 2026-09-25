@@ -20,6 +20,7 @@ import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 const COMMIT_SHA = "a".repeat(40);
 const PAYLOAD = {
   installationId: 1,
+  githubRepoId: 555,
   repositoryFullName: "octo/repo",
   pullRequestNumber: 42,
   commitSha: COMMIT_SHA,

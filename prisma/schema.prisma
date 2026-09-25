@@ -69,6 +69,8 @@ model Repository {
   fullName       String
   isEnabled      Boolean      @default(true)
   settings       Json         @default("{}")
+  /// Set when the repository is removed from the installation; cleared when it is added back.
+  removedAt      DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   reviews        Review[]

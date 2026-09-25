@@ -6,7 +6,6 @@ import {
   createReviewFinding,
   createReviewRequest,
   createReviewResult,
-  installationId,
   repositoryId,
   reviewId,
 } from "../helpers/factories";
@@ -20,7 +19,7 @@ import {
   createReviewRecord,
   failReview,
   findExistingReviewByCommitSha,
-  findRepositoryByFullName,
+  findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
   saveReviewFindings,
@@ -61,8 +60,8 @@ function setupSuccessfulDbMocks() {
     owner: "test-owner",
     repo: "test-repo",
   });
-  vi.mocked(findRepositoryByFullName).mockResolvedValue(
-    ok({ id: repositoryId(), installationId: installationId() }),
+  vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
+    ok({ id: repositoryId(), isEnabled: true }),
   );
   vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
   vi.mocked(createReviewRecord).mockResolvedValue(ok(NEW_REVIEW_CLAIM));
@@ -108,9 +107,11 @@ describe("executeReview — review pipeline", () => {
     expect(result.data.issuesFound).toBeGreaterThanOrEqual(0);
     expect(result.data.processingTimeMs).toBeGreaterThanOrEqual(0);
 
-    expect(findRepositoryByFullName).toHaveBeenCalledWith(
-      "test-owner/test-repo",
-    );
+    expect(findOrCreateRepositoryForReview).toHaveBeenCalledWith({
+      githubInstallationId: 12345,
+      githubRepoId: 555,
+      fullName: "test-owner/test-repo",
+    });
     expect(findExistingReviewByCommitSha).toHaveBeenCalled();
     expect(createReviewRecord).toHaveBeenCalled();
     expect(github.fetchPullRequestDiff).toHaveBeenCalledWith(
@@ -236,8 +237,8 @@ describe("executeReview — review pipeline", () => {
     );
   });
 
-  it("returns REVIEW_DB_ERROR when repository is not found", async () => {
-    vi.mocked(findRepositoryByFullName).mockResolvedValue(ok(null));
+  it("skips the review when the installation is not active", async () => {
+    vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(ok(null));
 
     const result = await executeReview(
       createReviewRequest(),
@@ -245,13 +246,33 @@ describe("executeReview — review pipeline", () => {
       createMockLlmService(),
     );
 
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toBe("REVIEW_DB_ERROR");
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_REPOSITORY_UNAVAILABLE",
+    });
+    expect(createReviewRecord).not.toHaveBeenCalled();
+  });
+
+  it("skips the review when reviews are disabled for the repository", async () => {
+    vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
+      ok({ id: repositoryId(), isEnabled: false }),
+    );
+
+    const result = await executeReview(
+      createReviewRequest(),
+      createMockGitHubService(),
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_REPOSITORY_UNAVAILABLE",
+    });
+    expect(createReviewRecord).not.toHaveBeenCalled();
   });
 
   it("returns REVIEW_DB_ERROR when repository lookup fails", async () => {
-    vi.mocked(findRepositoryByFullName).mockResolvedValue(
+    vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
       err("DB connection error"),
     );
 

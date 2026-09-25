@@ -210,6 +210,7 @@ export function createReviewRequest(
 ): ReviewRequest {
   return {
     installationId: 12345,
+    githubRepoId: 555,
     repositoryFullName: "test-owner/test-repo",
     pullRequestNumber: 42,
     commitSha: "abc123def456",

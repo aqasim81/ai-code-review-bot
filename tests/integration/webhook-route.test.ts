@@ -6,8 +6,10 @@ vi.mock("@/lib/queue/producer");
 
 import { POST } from "@/app/api/webhooks/github/route";
 import {
+  addRepositoriesToInstallation,
   createInstallationWithRepositories,
   markInstallationDeleted,
+  setInstallationSuspended,
 } from "@/lib/db/queries";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
 import { ok } from "@/types/results";
@@ -51,7 +53,7 @@ function createPullRequestBody(overrides?: Record<string, unknown>): string {
   return JSON.stringify({
     action: "opened",
     pull_request: { number: 42, head: { sha: HEAD_SHA } },
-    repository: { full_name: "test-owner/test-repo" },
+    repository: { id: 555, full_name: "test-owner/test-repo" },
     installation: { id: 12345 },
     ...overrides,
   });
@@ -114,7 +116,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: "42", head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },
@@ -124,7 +126,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: "abc:123" } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },
@@ -134,7 +136,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test:repo" },
+        repository: { id: 555, full_name: "test-owner/test:repo" },
         installation: { id: 12345 },
       },
     },
@@ -144,7 +146,7 @@ describe("POST /api/webhooks/github", () => {
       body: {
         action: "opened",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo/extra" },
+        repository: { id: 555, full_name: "test-owner/test-repo/extra" },
         installation: { id: 12345 },
       },
     },
@@ -155,7 +157,7 @@ describe("POST /api/webhooks/github", () => {
         action: "synchronize",
         before: "not-a-sha",
         pull_request: { number: 42, head: { sha: HEAD_SHA } },
-        repository: { full_name: "test-owner/test-repo" },
+        repository: { id: 555, full_name: "test-owner/test-repo" },
         installation: { id: 12345 },
       },
     },
@@ -255,4 +257,57 @@ describe("POST /api/webhooks/github", () => {
       expect(enqueueDeltaReviewJob).not.toHaveBeenCalled();
     },
   );
+
+  it("records repositories added to an installation", async () => {
+    vi.mocked(addRepositoriesToInstallation).mockResolvedValueOnce(
+      ok({ repositoryCount: 1 }),
+    );
+    const request = await buildWebhookRequest({
+      eventName: "installation_repositories",
+      body: JSON.stringify({
+        action: "added",
+        installation: { id: 12345, account: { login: "acme", type: "User" } },
+        repositories_added: [{ id: 200, full_name: "acme/new-repo" }],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      received: true,
+      acknowledged: true,
+    });
+    expect(addRepositoriesToInstallation).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["suspend", true],
+    ["unsuspend", false],
+  ])("records an installation '%s'", async (action, suspended) => {
+    vi.mocked(setInstallationSuspended).mockResolvedValueOnce(ok(undefined));
+    const request = await buildWebhookRequest({
+      eventName: "installation",
+      body: JSON.stringify({ action, installation: { id: 12345 } }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(setInstallationSuspended).toHaveBeenCalledWith(12345, suspended);
+  });
+
+  it("acknowledges an event it does not handle", async () => {
+    const request = await buildWebhookRequest({
+      eventName: "installation",
+      body: JSON.stringify({
+        action: "new_permissions_accepted",
+        installation: { id: 12345 },
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(await response.json()).toEqual({ received: true, handled: false });
+  });
 });
