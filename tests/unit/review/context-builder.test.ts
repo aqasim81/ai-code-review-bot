@@ -11,6 +11,18 @@ import {
   createParsedDiffFile,
 } from "../../helpers/factories";
 
+function linesOfCode(count: number) {
+  return createDiffHunk({
+    lines: Array.from({ length: count }, (_, i) =>
+      createDiffLine({
+        type: "added",
+        content: `const variable${i} = "value that is moderately long to inflate token count";`,
+        newLineNumber: i + 1,
+      }),
+    ),
+  });
+}
+
 describe("buildReviewContext", () => {
   const emptyAstMap = new Map<string, AstFileContext>();
   const emptyContentMap = new Map<string, string>();
@@ -72,8 +84,8 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0]?.files[0]?.filePath).toBe("src/code.ts");
+    expect(result.data.chunks).toHaveLength(1);
+    expect(result.data.chunks[0]?.files[0]?.filePath).toBe("src/code.ts");
   });
 
   it("filters out deleted files from review", () => {
@@ -90,7 +102,7 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    const allFiles = result.data.flatMap((c) => c.files);
+    const allFiles = result.data.chunks.flatMap((c) => c.files);
     expect(allFiles).toHaveLength(1);
     expect(allFiles[0]?.filePath).toBe("src/kept.ts");
   });
@@ -119,7 +131,7 @@ describe("buildReviewContext", () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
 
-    const enrichedHunks = result.data[0]?.files[0]?.enrichedHunks ?? [];
+    const enrichedHunks = result.data.chunks[0]?.files[0]?.enrichedHunks ?? [];
     expect(enrichedHunks).toHaveLength(1);
     expect(enrichedHunks[0]?.enclosingScopes).toHaveLength(1);
     expect(enrichedHunks[0]?.enclosingScopes[0]?.name).toBe("overlapping");
@@ -133,7 +145,7 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    const file = result.data[0]?.files[0];
+    const file = result.data.chunks[0]?.files[0];
     expect(file?.imports).toEqual([]);
     for (const eh of file?.enrichedHunks ?? []) {
       expect(eh.enclosingScopes).toEqual([]);
@@ -148,7 +160,7 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data[0]?.files[0]?.fullFileContent).toBeNull();
+    expect(result.data.chunks[0]?.files[0]?.fullFileContent).toBeNull();
   });
 
   it("includes imports from AST context", () => {
@@ -171,8 +183,8 @@ describe("buildReviewContext", () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
 
-    expect(result.data[0]?.files[0]?.imports).toHaveLength(1);
-    expect(result.data[0]?.files[0]?.imports[0]?.source).toBe("react");
+    expect(result.data.chunks[0]?.files[0]?.imports).toHaveLength(1);
+    expect(result.data.chunks[0]?.files[0]?.imports[0]?.source).toBe("react");
   });
 
   // --- Prioritization ---
@@ -188,7 +200,7 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    const allFiles = result.data.flatMap((c) => c.files);
+    const allFiles = result.data.chunks.flatMap((c) => c.files);
     expect(allFiles[0]?.filePath).toBe("src/auth/login.ts");
   });
 
@@ -216,7 +228,7 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    const allFiles = result.data.flatMap((c) => c.files);
+    const allFiles = result.data.chunks.flatMap((c) => c.files);
     expect(allFiles[0]?.filePath).toBe("src/large.ts");
     expect(allFiles[1]?.filePath).toBe("src/small.ts");
   });
@@ -234,41 +246,41 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0]?.files).toHaveLength(2);
+    expect(result.data.chunks).toHaveLength(1);
+    expect(result.data.chunks[0]?.files).toHaveLength(2);
   });
 
   it("chunks files to stay within max token budget", () => {
-    // Use a very small max to force chunking
+    // Each file is ~350 estimated tokens: two fit a 500-token chunk only apart.
     const diff = createParsedDiff({
       files: [
-        createParsedDiffFile({ filePath: "src/a.ts" }),
-        createParsedDiffFile({ filePath: "src/b.ts" }),
+        createParsedDiffFile({
+          filePath: "src/a.ts",
+          hunks: [linesOfCode(15)],
+        }),
+        createParsedDiffFile({
+          filePath: "src/b.ts",
+          hunks: [linesOfCode(15)],
+        }),
       ],
     });
     const result = buildReviewContext(diff, emptyAstMap, emptyContentMap, {
-      maxTokensPerChunk: 1,
+      maxTokensPerChunk: 500,
     });
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    // With maxTokens=1, each file should be in its own chunk
-    expect(result.data.length).toBeGreaterThanOrEqual(2);
+    expect(result.data.chunks).toHaveLength(2);
+    expect(result.data.oversizedFilePaths).toEqual([]);
   });
 
-  it("places single large file into its own chunk", () => {
-    const bigLines = Array.from({ length: 100 }, (_, i) =>
-      createDiffLine({
-        type: "added",
-        content: `const variable${i} = "value that is moderately long to inflate token count";`,
-        newLineNumber: i + 1,
-      }),
-    );
-    const bigHunk = createDiffHunk({ lines: bigLines });
-
+  it("skips a file larger than a whole chunk and reports it", () => {
     const diff = createParsedDiff({
       files: [
-        createParsedDiffFile({ filePath: "src/big.ts", hunks: [bigHunk] }),
+        createParsedDiffFile({
+          filePath: "fixtures/huge.json",
+          hunks: [linesOfCode(100)],
+        }),
         createParsedDiffFile({ filePath: "src/small.ts" }),
       ],
     });
@@ -279,7 +291,14 @@ describe("buildReviewContext", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.length).toBeGreaterThanOrEqual(2);
+    expect(result.data.oversizedFilePaths).toEqual(["fixtures/huge.json"]);
+    const reviewed = result.data.chunks.flatMap((chunk) =>
+      chunk.files.map((file) => file.filePath),
+    );
+    expect(reviewed).toEqual(["src/small.ts"]);
+    for (const chunk of result.data.chunks) {
+      expect(chunk.estimatedTokenCount).toBeLessThanOrEqual(500);
+    }
   });
 
   it("estimates token count as roughly chars/4", () => {
@@ -291,7 +310,9 @@ describe("buildReviewContext", () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Token count should be a positive integer
-    expect(result.data[0]?.estimatedTokenCount).toBeGreaterThan(0);
-    expect(Number.isInteger(result.data[0]?.estimatedTokenCount)).toBe(true);
+    expect(result.data.chunks[0]?.estimatedTokenCount).toBeGreaterThan(0);
+    expect(Number.isInteger(result.data.chunks[0]?.estimatedTokenCount)).toBe(
+      true,
+    );
   });
 });

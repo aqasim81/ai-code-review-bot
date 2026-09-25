@@ -31,6 +31,7 @@ import type {
   ParsedDiff,
   ReviewChunk,
   ReviewClaimRef,
+  ReviewContext,
   ReviewEngineResult,
   ReviewFinding,
   ReviewRequest,
@@ -330,7 +331,7 @@ async function enrichDiffWithContext(
   owner: string,
   repo: string,
   commitSha: string,
-): Promise<Result<readonly ReviewChunk[], "REVIEW_LLM_FAILED">> {
+): Promise<Result<ReviewContext, "REVIEW_LLM_FAILED">> {
   const reviewableFiles = parsedDiff.files.filter(
     (f) => !f.isBinary && f.changeType !== "deleted",
   );
@@ -361,7 +362,12 @@ async function enrichDiffWithContext(
     logger.warn("Context build returned no reviewable files", {
       error: contextResult.error,
     });
-    return ok([]);
+    return ok({ chunks: [], oversizedFilePaths: [] });
+  }
+  if (contextResult.data.oversizedFilePaths.length > 0) {
+    logger.warn("Skipping files too large to review", {
+      filePaths: contextResult.data.oversizedFilePaths,
+    });
   }
 
   return ok(contextResult.data);
@@ -372,6 +378,18 @@ interface LlmAnalysisResult {
   readonly summary: string;
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
+}
+
+const MAX_LISTED_OVERSIZED_FILES = 10;
+
+function describeOversizedFiles(filePaths: readonly string[]): string {
+  const listed = filePaths
+    .slice(0, MAX_LISTED_OVERSIZED_FILES)
+    .map((filePath) => `\`${filePath}\``)
+    .join(", ");
+  const more = filePaths.length - MAX_LISTED_OVERSIZED_FILES;
+  const suffix = more > 0 ? ` and ${more} more` : "";
+  return `Not reviewed because they are too large: ${listed}${suffix}.`;
 }
 
 function describeFindingCount(findingCount: number): string {
@@ -657,32 +675,41 @@ async function runReviewSteps(
     );
   }
 
-  const chunks = await enrichDiffWithContext(
+  const reviewContext = await enrichDiffWithContext(
     githubService,
     parsedDiff,
     owner,
     repo,
     request.commitSha,
   );
-  if (!chunks.success) {
+  if (!reviewContext.success) {
     await markReviewFailed(claim, "Context enrichment failed");
     return err("REVIEW_LLM_FAILED");
   }
-  if (chunks.data.length === 0) {
+  const { chunks, oversizedFilePaths } = reviewContext.data;
+  if (chunks.length === 0) {
     return completeReviewEarly(
       claim,
       startTime,
-      "No reviewable content after filtering.",
+      oversizedFilePaths.length > 0
+        ? describeOversizedFiles(oversizedFilePaths)
+        : "No reviewable content after filtering.",
     );
   }
 
-  return analyzeSaveAndPostReview(context, chunks.data, parsedDiff);
+  return analyzeSaveAndPostReview(
+    context,
+    chunks,
+    parsedDiff,
+    oversizedFilePaths,
+  );
 }
 
 async function analyzeSaveAndPostReview(
   context: ReviewStepsContext,
   chunks: readonly ReviewChunk[],
   parsedDiff: ParsedDiff,
+  oversizedFilePaths: readonly string[],
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
   const { claim, request, llmService, startTime } = context;
   const { reviewId } = claim;
@@ -692,7 +719,11 @@ async function analyzeSaveAndPostReview(
     await markReviewFailed(claim, "LLM analysis failed");
     return err("REVIEW_LLM_FAILED");
   }
-  const { findings, summary } = llmResult.data;
+  const { findings } = llmResult.data;
+  const summary =
+    oversizedFilePaths.length > 0
+      ? `${llmResult.data.summary}\n\n${describeOversizedFiles(oversizedFilePaths)}`
+      : llmResult.data.summary;
 
   logger.info("LLM analysis complete", {
     findingCount: findings.length,

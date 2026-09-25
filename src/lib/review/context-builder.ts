@@ -10,6 +10,7 @@ import type {
   ParsedDiff,
   ParsedDiffFile,
   ReviewChunk,
+  ReviewContext,
 } from "@/types/review";
 
 const DEFAULT_MAX_TOKENS_PER_CHUNK = 30_000;
@@ -42,7 +43,7 @@ export function buildReviewContext(
   astContexts: ReadonlyMap<string, AstFileContext>,
   fileContents: ReadonlyMap<string, string>,
   options?: BuildReviewContextOptions,
-): Result<readonly ReviewChunk[], ContextBuildError> {
+): Result<ReviewContext, ContextBuildError> {
   const maxTokens = options?.maxTokensPerChunk ?? DEFAULT_MAX_TOKENS_PER_CHUNK;
 
   const reviewableFiles = filterReviewableFiles(parsedDiff.files);
@@ -58,10 +59,20 @@ export function buildReviewContext(
     ),
   );
 
+  // A file larger than a whole chunk cannot be sent in one request, and would
+  // fail the review on every attempt; skip it and report it instead.
   const prioritized = prioritizeFiles(fileContexts);
-  const chunks = chunkFileContexts(prioritized, maxTokens);
+  const fitting = prioritized.filter(
+    (file) => estimateFileTokenCount(file) <= maxTokens,
+  );
+  const oversizedFilePaths = prioritized
+    .filter((file) => estimateFileTokenCount(file) > maxTokens)
+    .map((file) => file.filePath);
 
-  return ok(chunks);
+  return ok({
+    chunks: chunkFileContexts(fitting, maxTokens),
+    oversizedFilePaths,
+  });
 }
 
 function filterReviewableFiles(
