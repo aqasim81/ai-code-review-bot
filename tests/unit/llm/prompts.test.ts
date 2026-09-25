@@ -92,7 +92,7 @@ describe("buildReviewPrompt", () => {
     expect(result.user).toContain("lines 5-25");
   });
 
-  it("includes hunk header and diff lines with +/- prefixes", () => {
+  it("labels removed lines with their old number so it can't be read as a new-file line", () => {
     const hunk = createDiffHunk({
       header: "@@ -1,3 +1,4 @@",
       lines: [
@@ -127,7 +127,8 @@ describe("buildReviewPrompt", () => {
 
     expect(result.user).toContain("@@ -1,3 +1,4 @@");
     expect(result.user).toContain("+ L2: const b = 2;");
-    expect(result.user).toContain("- L2: const c = 3;");
+    expect(result.user).toContain("- old L2: const c = 3;");
+    expect(result.user).not.toContain("- L2:");
     expect(result.user).toContain("  L1: const a = 1;");
   });
 
@@ -173,6 +174,15 @@ describe("buildReviewPrompt", () => {
     expect(result.system).toContain("filePath");
     expect(result.system).toContain("lineNumber");
     expect(result.system).toContain("confidence");
+  });
+
+  it("system prompt asks for new-file line numbers, never old ones", () => {
+    const result = buildReviewPrompt(createReviewChunk());
+
+    expect(result.system).toContain("`old L<n>`");
+    expect(result.system).toContain(
+      "Never report the number of an `old L<n>` line",
+    );
   });
 
   it("shows 'unknown' for null language", () => {
