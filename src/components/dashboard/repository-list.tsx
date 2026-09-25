@@ -50,6 +50,7 @@ export function RepositoryList({
               <div className="flex items-center gap-3">
                 <RepositoryToggle
                   repositoryId={repo.id}
+                  repositoryName={repo.fullName}
                   isEnabled={repo.isEnabled}
                   canManage={repo.canManage}
                 />
