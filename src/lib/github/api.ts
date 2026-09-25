@@ -79,8 +79,19 @@ async function createInstallationAccessToken(
       installationId,
       error: describeError(error),
     });
-    return err("GITHUB_AUTH_FAILED");
+    return err(classifyInstallationTokenError(error));
   }
+}
+
+/**
+ * GitHub answers a token request for a deleted installation with 404 and for
+ * a suspended one with 403. Neither changes on a retry.
+ */
+function classifyInstallationTokenError(error: unknown): GitHubError {
+  const classified = classifyGitHubError(error);
+  return classified === "GITHUB_NOT_FOUND" || classified === "GITHUB_FORBIDDEN"
+    ? "GITHUB_INSTALLATION_UNAVAILABLE"
+    : classified;
 }
 
 function readResponseHeaders(error: Error): Record<string, unknown> {

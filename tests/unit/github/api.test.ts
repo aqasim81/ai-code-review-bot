@@ -238,3 +238,50 @@ describe("fetchPullRequestDiff error classification", () => {
     expect(result).toEqual({ success: false, error: expected });
   });
 });
+
+describe("installation token error classification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    octokitMocks.rateLimitGet.mockResolvedValue({
+      data: { resources: { core: { remaining: 5000, reset: 0 } } },
+    });
+  });
+
+  it.each([
+    [
+      "a 404 for a deleted installation",
+      httpError(404, "Not Found"),
+      "GITHUB_INSTALLATION_UNAVAILABLE",
+    ],
+    [
+      "a 403 for a suspended installation",
+      httpError(403, "This installation has been suspended", {
+        "x-ratelimit-remaining": "4999",
+      }),
+      "GITHUB_INSTALLATION_UNAVAILABLE",
+    ],
+    [
+      "a 403 rate limit",
+      httpError(403, "API rate limit exceeded", {
+        "x-ratelimit-remaining": "0",
+      }),
+      "GITHUB_RATE_LIMITED",
+    ],
+    ["a 429", httpError(429, "Too many requests"), "GITHUB_RATE_LIMITED"],
+    ["a 401", httpError(401, "Bad credentials"), "GITHUB_AUTH_FAILED"],
+    ["a 502", httpError(502, "Bad Gateway"), "GITHUB_UNKNOWN_ERROR"],
+    ["a network error", new Error("ECONNRESET"), "GITHUB_UNKNOWN_ERROR"],
+  ])("classifies %s", async (_label, error, expected) => {
+    octokitMocks.createInstallationAccessToken.mockRejectedValue(error);
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).fetchPullRequestDiff(
+      "owner",
+      "repo",
+      42,
+    );
+
+    expect(result).toEqual({ success: false, error: expected });
+    expect(octokitMocks.getPullRequest).not.toHaveBeenCalled();
+  });
+});
