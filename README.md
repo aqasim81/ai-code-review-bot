@@ -76,8 +76,9 @@ cd ai-code-review-bot
 pnpm install
 
 # Copy environment variables
-cp .env.example .env
-# Fill in your GitHub App credentials, database URL, and API key
+cp .env.example .env.local
+# Fill in your GitHub App credentials, database URL, and API key.
+# Next.js, Prisma and the worker all read .env.local.
 
 # Start infrastructure (PostgreSQL + Valkey)
 docker compose up -d
@@ -110,6 +111,8 @@ See `.env.example` for all required variables. Key ones:
 | `VALKEY_URL` | Valkey/Redis connection string |
 | `ANTHROPIC_API_KEY` | API key for LLM analysis |
 | `NEXTAUTH_SECRET` | Secret for session encryption |
+| `NEXTAUTH_URL` | Public URL of the dashboard (e.g. `http://localhost:3000`) |
+| `GITHUB_APP_SLUG` | Optional. Your GitHub App's URL slug, used for the install link (default `code-review-bot`) |
 
 ## Development
 
@@ -117,7 +120,7 @@ See `.env.example` for all required variables. Key ones:
 |---------|-------------|
 | `pnpm dev` | Start Next.js dev server |
 | `pnpm worker:dev` | Start background worker |
-| `pnpm validate` | Run all checks (lint + type-check + tests) |
+| `pnpm validate` | Run all checks (lint + type-check + knip + tests) |
 | `pnpm test` | Run Vitest tests |
 | `pnpm test:coverage` | Run tests with coverage report |
 | `pnpm type-check` | TypeScript type checking |
