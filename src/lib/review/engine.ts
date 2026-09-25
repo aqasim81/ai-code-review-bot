@@ -309,10 +309,11 @@ async function postReviewToGitHub(
   owner: string,
   repo: string,
   request: ReviewRequest,
+  reviewId: ReviewId,
   findings: readonly ReviewFinding[],
   parsedDiff: ParsedDiff,
   llmSummary: string,
-): Promise<ReviewFinding[]> {
+): Promise<Result<ReviewFinding[], ReviewEngineError>> {
   const { mappedComments, unmappedFindings } = mapFindingsToGitHubComments(
     findings,
     parsedDiff,
@@ -347,19 +348,22 @@ async function postReviewToGitHub(
 
   if (!postResult.success) {
     logger.error("Failed to post review to GitHub", {
+      reviewId,
       error: postResult.error,
     });
-  } else {
-    logger.info("Review posted to GitHub", {
-      githubReviewId: postResult.data.githubReviewId,
-      postedComments: postResult.data.postedCommentCount,
-    });
+    await markReviewFailed(reviewId, "Failed to post review to GitHub");
+    return err("REVIEW_POST_FAILED");
   }
 
-  return [
+  logger.info("Review posted to GitHub", {
+    githubReviewId: postResult.data.githubReviewId,
+    postedComments: postResult.data.postedCommentCount,
+  });
+
+  return ok([
     ...mappedComments.map((c) => c.finding),
     ...unmappedFindings.map((u) => u.finding),
-  ];
+  ]);
 }
 
 async function saveCompletedReview(
@@ -507,22 +511,24 @@ export async function executeReview(
     outputTokens: llmResult.data.totalOutputTokens,
   });
 
-  const findingsToSave = await postReviewToGitHub(
+  const postResult = await postReviewToGitHub(
     githubService,
     owner,
     repo,
     request,
+    reviewId,
     llmResult.data.findings,
     parsedDiff,
     llmResult.data.summary,
   );
+  if (!postResult.success) return postResult;
 
   const processingTimeMs = Date.now() - startTime;
   const saveResult = await saveCompletedReview(
     reviewId,
     llmResult.data.summary,
     processingTimeMs,
-    findingsToSave,
+    postResult.data,
   );
   if (!saveResult.success) return saveResult;
 
