@@ -179,6 +179,28 @@ describe("dashboard repository actions", () => {
     });
   });
 
+  it.each([
+    ["custom instructions", "customInstructions", "Focus on\u0000 auth"],
+    ["an exclude pattern", "excludePatterns", "dist/\u0000**"],
+  ])(
+    "refuses settings with a NUL character in %s without saving",
+    async (_label, field, value) => {
+      vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
+        repositoryWithGithubId(1),
+      );
+      const form = validSettingsForm();
+      form.set(field, value);
+
+      const result = await saveRepositorySettingsAction(REPO_ID, form);
+
+      expect(result).toEqual({
+        success: false,
+        error: "Settings can't contain NUL characters",
+      });
+      expect(updateRepositorySettings).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses when the scoped update matches no repository", async () => {
     vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
       repositoryWithGithubId(1),
