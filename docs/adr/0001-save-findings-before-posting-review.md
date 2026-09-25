@@ -30,8 +30,9 @@ retryable with the old order would have allowed a retry to post the same comment
     comments. If the claim does not match, another job owns the review → `REVIEW_ALREADY_EXISTS`.
     *(Added for #23.)* Job IDs are deterministic per repository, PR and commit, and BullMQ runs
     one attempt of a job at a time. A PROCESSING review under the same job ID therefore means
-    the earlier attempt died, so the retry can reclaim it at once. The 30-minute cutoff is a
-    backstop for reviews claimed by a different job.
+    the earlier attempt died or lost its BullMQ lock, so the retry can reclaim it at once; if
+    the earlier attempt is still running, the claim token below stops it. The 30-minute cutoff
+    is a backstop for reviews claimed by a different job.
 - Every claim or create also sets a random `claimToken` (a fence). `saveReviewFindings`,
   `markReviewCompleted` and `failReview` only write while the review is PROCESSING with that
   token, and `isReviewClaimCurrent` is checked right before posting to GitHub. An attempt that
@@ -54,8 +55,12 @@ retryable with the old order would have allowed a retry to post the same comment
   write), the review is marked FAILED and a retry posts the comments a second time.
 - A review left PROCESSING by a killed worker or a failed `failReview` is reclaimed by the next
   attempt of the same job (#23).
-- Known gap: the claim check before posting and the post itself are not atomic. An attempt that
-  loses its claim in that short window can still post, so the pull request gets a second review.
+- Known gap: posting to GitHub cannot be fenced. The window runs from the claim check before
+  posting until `markReviewCompleted`, including the network call. If another attempt reclaims
+  the review anywhere in that span, both attempts can post, so the pull request gets a second
+  review. For example: A posts, B reclaims before A marks the review completed, A stops with
+  `REVIEW_CLAIM_LOST`, and B posts again. Looking up the bot's existing review before posting
+  (#22) would close this.
 - Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
   commit is recorded as completed. Nothing reclaims the review until a job arrives after the
   30-minute cutoff.
