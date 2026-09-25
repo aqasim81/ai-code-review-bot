@@ -29,6 +29,7 @@ import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
 import { err, ok } from "@/types/results";
+import { mergeWithDefaults, type RepositorySettings } from "@/types/settings";
 
 // A new file with enough added lines (~24k estimated tokens) that two of them
 // cannot share one 30k-token review chunk, with margin either way.
@@ -54,14 +55,22 @@ function retryClaimFor(id: string) {
   return { reviewId: reviewId(id), claimToken: "retry-token" };
 }
 
+function useRepositorySettings(stored: RepositorySettings) {
+  vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
+    ok({
+      id: repositoryId(),
+      isEnabled: true,
+      settings: mergeWithDefaults(stored),
+    }),
+  );
+}
+
 function setupSuccessfulDbMocks() {
   vi.mocked(parseRepositoryFullName).mockReturnValue({
     owner: "test-owner",
     repo: "test-repo",
   });
-  vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
-    ok({ id: repositoryId(), isEnabled: true }),
-  );
+  useRepositorySettings({});
   vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
   vi.mocked(createReviewRecord).mockResolvedValue(ok(NEW_REVIEW_CLAIM));
   vi.mocked(saveReviewFindings).mockResolvedValue(ok(true));
@@ -254,7 +263,11 @@ describe("executeReview — review pipeline", () => {
 
   it("skips the review when reviews are disabled for the repository", async () => {
     vi.mocked(findOrCreateRepositoryForReview).mockResolvedValue(
-      ok({ id: repositoryId(), isEnabled: false }),
+      ok({
+        id: repositoryId(),
+        isEnabled: false,
+        settings: mergeWithDefaults({}),
+      }),
     );
 
     const result = await executeReview(
@@ -1136,5 +1149,174 @@ describe("executeReview — review pipeline", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
+  });
+});
+
+describe("executeReview — repository settings", () => {
+  const TWO_FILE_DIFF = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,1 +1,2 @@",
+    " const a = 1;",
+    "+const b = 2;",
+    "diff --git a/dist/bundle.js b/dist/bundle.js",
+    "--- a/dist/bundle.js",
+    "+++ b/dist/bundle.js",
+    "@@ -1,1 +1,2 @@",
+    " const x = 1;",
+    "+const y = 2;",
+    "",
+  ].join("\n");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithDiff(diff: string) {
+    return createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(ok(diff)),
+    });
+  }
+
+  function llmReturning(findings: ReturnType<typeof createReviewFinding>[]) {
+    return createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(ok(createReviewResult({ findings }))),
+    });
+  }
+
+  function reviewedFilePaths(llm: ReturnType<typeof createMockLlmService>) {
+    return vi
+      .mocked(llm.analyzeReviewChunk)
+      .mock.calls.flatMap(([chunk]) => chunk.files.map((f) => f.filePath));
+  }
+
+  it("never fetches or reviews a file matching an exclude pattern", async () => {
+    useRepositorySettings({ excludePatterns: ["dist/**"] });
+    const github = githubWithDiff(TWO_FILE_DIFF);
+    const llm = createMockLlmService();
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success).toBe(true);
+    expect(reviewedFilePaths(llm)).toEqual(["src/a.ts"]);
+    expect(github.fetchFileContent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "dist/bundle.js",
+      expect.anything(),
+    );
+  });
+
+  it("matches a pattern without a slash against the file name in any directory", async () => {
+    useRepositorySettings({ excludePatterns: ["*.js"] });
+    const llm = createMockLlmService();
+
+    await executeReview(
+      createReviewRequest(),
+      githubWithDiff(TWO_FILE_DIFF),
+      llm,
+    );
+
+    expect(reviewedFilePaths(llm)).toEqual(["src/a.ts"]);
+  });
+
+  it("completes early when every file is excluded", async () => {
+    useRepositorySettings({ excludePatterns: ["src/**", "dist/**"] });
+    const llm = createMockLlmService();
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithDiff(TWO_FILE_DIFF),
+      llm,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.issuesFound).toBe(0);
+    expect(llm.analyzeReviewChunk).not.toHaveBeenCalled();
+    expect(markReviewCompleted).toHaveBeenCalled();
+  });
+
+  it("drops findings below the minimum severity or in a disabled category", async () => {
+    useRepositorySettings({
+      minimumSeverity: "WARNING",
+      enabledCategories: ["BUGS", "SECURITY"],
+    });
+    const kept = createReviewFinding({ category: "BUGS", severity: "WARNING" });
+    const llm = llmReturning([
+      kept,
+      createReviewFinding({ category: "BUGS", severity: "SUGGESTION" }),
+      createReviewFinding({ category: "STYLE", severity: "CRITICAL" }),
+    ]);
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF),
+      llm,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.issuesFound).toBe(1);
+    expect(saveReviewFindings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issuesFound: 1,
+        comments: [
+          expect.objectContaining({ category: "BUGS", severity: "WARNING" }),
+        ],
+      }),
+    );
+  });
+
+  it("drops NITPICK findings under the default minimum severity", async () => {
+    const llm = llmReturning([createReviewFinding({ severity: "NITPICK" })]);
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF),
+      llm,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.issuesFound).toBe(0);
+  });
+
+  it("does not request changes for a CRITICAL finding in a disabled category", async () => {
+    useRepositorySettings({ enabledCategories: ["BUGS"] });
+    const github = githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF);
+    const llm = llmReturning([
+      createReviewFinding({ category: "SECURITY", severity: "CRITICAL" }),
+      createReviewFinding({ category: "BUGS", severity: "WARNING" }),
+    ]);
+
+    await executeReview(createReviewRequest(), github, llm);
+
+    expect(github.postPullRequestReview).toHaveBeenCalledWith(
+      "test-owner",
+      "test-repo",
+      42,
+      expect.objectContaining({ event: "COMMENT" }),
+    );
+  });
+
+  it("passes the custom instructions to the model", async () => {
+    useRepositorySettings({ customInstructions: "We use tabs." });
+    const llm = createMockLlmService();
+
+    await executeReview(
+      createReviewRequest(),
+      githubWithDiff(SINGLE_FILE_TYPESCRIPT_DIFF),
+      llm,
+    );
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledWith(
+      expect.anything(),
+      "We use tabs.",
+    );
   });
 });

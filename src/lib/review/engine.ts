@@ -23,6 +23,10 @@ import {
   filterReviewableFiles,
 } from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
+import {
+  createExcludedPathMatcher,
+  filterFindingsBySettings,
+} from "@/lib/review/settings-filter";
 import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
 import type { GitHubError, ReviewEngineError } from "@/types/errors";
@@ -41,10 +45,16 @@ import type {
   ReviewFinding,
   ReviewRequest,
 } from "@/types/review";
+import type { RepositorySettings } from "@/types/settings";
+
+interface ReviewedRepository {
+  readonly repositoryId: RepositoryId;
+  readonly settings: Required<RepositorySettings>;
+}
 
 async function lookupRepository(
   request: ReviewRequest,
-): Promise<Result<RepositoryId, ReviewEngineError>> {
+): Promise<Result<ReviewedRepository, ReviewEngineError>> {
   const repoResult = await findOrCreateRepositoryForReview({
     githubInstallationId: request.installationId,
     githubRepoId: request.githubRepoId,
@@ -71,7 +81,10 @@ async function lookupRepository(
     });
     return err("REVIEW_REPOSITORY_UNAVAILABLE");
   }
-  return ok(repoResult.data.id);
+  return ok({
+    repositoryId: repoResult.data.id,
+    settings: repoResult.data.settings,
+  });
 }
 
 async function createNewReviewRecord(
@@ -421,13 +434,17 @@ function describeFindingCount(findingCount: number): string {
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
+  customInstructions: string,
 ): Promise<Result<LlmAnalysisResult, StepFailure>> {
   const allFindings: ReviewFinding[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
   for (const chunk of chunks) {
-    const result = await llmService.analyzeReviewChunk(chunk);
+    const result = await llmService.analyzeReviewChunk(
+      chunk,
+      customInstructions,
+    );
     if (!result.success) {
       logger.error("LLM analysis failed for chunk", {
         error: result.error,
@@ -660,6 +677,7 @@ interface ReviewStepsContext {
   readonly repo: string;
   readonly githubService: GitHubService;
   readonly llmService: LLMService;
+  readonly settings: Required<RepositorySettings>;
   readonly startTime: number;
 }
 
@@ -677,13 +695,16 @@ async function runReviewSteps(
   if (!diffResult.success) return diffResult;
 
   const filterPaths = request.filePathFilter;
-  const parsedDiff: ParsedDiff = filterPaths
-    ? {
-        files: diffResult.data.files.filter((f) =>
-          filterPaths.includes(f.filePath),
-        ),
-      }
-    : diffResult.data;
+  const isExcluded = createExcludedPathMatcher(
+    context.settings.excludePatterns,
+  );
+  const parsedDiff: ParsedDiff = {
+    files: diffResult.data.files.filter(
+      (f) =>
+        (!filterPaths || filterPaths.includes(f.filePath)) &&
+        !isExcluded(f.filePath),
+    ),
+  };
 
   if (parsedDiff.files.length === 0) {
     return completeReviewEarly(
@@ -718,19 +739,26 @@ async function analyzeSaveAndPostReview(
   parsedDiff: ParsedDiff,
   oversizedNote: string | null,
 ): Promise<Result<ReviewEngineResult, StepFailure>> {
-  const { claim, request, llmService, startTime } = context;
+  const { claim, request, llmService, settings, startTime } = context;
   const { reviewId } = claim;
 
-  const llmResult = await analyzeAllChunks(llmService, chunks);
+  const llmResult = await analyzeAllChunks(
+    llmService,
+    chunks,
+    settings.customInstructions,
+  );
   if (!llmResult.success) return llmResult;
-  const { findings } = llmResult.data;
+  const findings = filterFindingsBySettings(llmResult.data.findings, settings);
   const findingCountText = describeFindingCount(findings.length);
   const summary = oversizedNote
     ? `${findingCountText}\n\n${oversizedNote}`
     : findingCountText;
 
   logger.info("LLM analysis complete", {
+    jobId: request.jobId,
+    repository: request.repositoryFullName,
     findingCount: findings.length,
+    droppedBySettings: llmResult.data.findings.length - findings.length,
     inputTokens: llmResult.data.totalInputTokens,
     outputTokens: llmResult.data.totalOutputTokens,
   });
@@ -816,7 +844,8 @@ export async function executeReview(
   const repositoryResult = await lookupRepository(request);
   if (!repositoryResult.success) return repositoryResult;
 
-  const claimResult = await claimReviewRecord(repositoryResult.data, request);
+  const { repositoryId, settings } = repositoryResult.data;
+  const claimResult = await claimReviewRecord(repositoryId, request);
   if (!claimResult.success) return claimResult;
 
   return runReviewStepsWithFailureGuard({
@@ -826,6 +855,7 @@ export async function executeReview(
     repo,
     githubService,
     llmService,
+    settings,
     startTime,
   });
 }

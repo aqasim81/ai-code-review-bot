@@ -14,6 +14,9 @@ vi.mock("@/lib/db/prisma-client", () => ({ prisma: prismaMock }));
 
 import { Prisma } from "@/generated/prisma/client";
 import { findOrCreateRepositoryForReview } from "@/lib/db/queries";
+import { mergeWithDefaults } from "@/types/settings";
+
+const DEFAULT_SETTINGS = mergeWithDefaults({});
 
 const INPUT = {
   githubInstallationId: 12345,
@@ -27,6 +30,7 @@ function row(overrides: Record<string, unknown> = {}) {
     isEnabled: true,
     fullName: "acme/renamed-app",
     removedAt: null,
+    settings: {},
     ...overrides,
   };
 }
@@ -100,7 +104,7 @@ describe("findOrCreateRepositoryForReview", () => {
     });
     expect(result).toEqual({
       success: true,
-      data: { id: "repo-1", isEnabled: true },
+      data: { id: "repo-1", isEnabled: true, settings: DEFAULT_SETTINGS },
     });
   });
 
@@ -148,7 +152,35 @@ describe("findOrCreateRepositoryForReview", () => {
 
     expect(result).toEqual({
       success: true,
-      data: { id: "repo-winner", isEnabled: true },
+      data: {
+        id: "repo-winner",
+        isEnabled: true,
+        settings: DEFAULT_SETTINGS,
+      },
+    });
+  });
+
+  it("returns the stored settings, with invalid fields replaced by defaults", async () => {
+    prismaMock.repository.findFirst.mockResolvedValue(
+      foundRow({
+        settings: { minimumSeverity: "CRITICAL", excludePatterns: "dist" },
+      }),
+    );
+
+    const result = await findOrCreateRepositoryForReview(INPUT);
+
+    expect(prismaMock.repository.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ settings: true }),
+      }),
+    );
+    expect(result).toEqual({
+      success: true,
+      data: {
+        id: "repo-1",
+        isEnabled: true,
+        settings: { ...DEFAULT_SETTINGS, minimumSeverity: "CRITICAL" },
+      },
     });
   });
 

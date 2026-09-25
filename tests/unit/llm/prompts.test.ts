@@ -13,7 +13,7 @@ import {
 describe("buildReviewPrompt", () => {
   it("returns object with system and user string properties", () => {
     const chunk = createReviewChunk();
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result).toHaveProperty("system");
     expect(result).toHaveProperty("user");
@@ -25,7 +25,7 @@ describe("buildReviewPrompt", () => {
     const chunk = createReviewChunk({
       files: [createFileReviewContext({ filePath: "src/lib/special.ts" })],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("src/lib/special.ts");
   });
@@ -39,7 +39,7 @@ describe("buildReviewPrompt", () => {
         }),
       ],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("python");
     expect(result.user).toContain("added");
@@ -59,7 +59,7 @@ describe("buildReviewPrompt", () => {
         }),
       ],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("Imports:");
     expect(result.user).toContain("useState, useEffect");
@@ -85,7 +85,7 @@ describe("buildReviewPrompt", () => {
         }),
       ],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("Scope:");
     expect(result.user).toContain('function "processData"');
@@ -123,7 +123,7 @@ describe("buildReviewPrompt", () => {
         }),
       ],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("@@ -1,3 +1,4 @@");
     expect(result.user).toContain("+ L2: const b = 2;");
@@ -139,7 +139,7 @@ describe("buildReviewPrompt", () => {
         createFileReviewContext({ filePath: "src/file-b.ts" }),
       ],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("src/file-a.ts");
     expect(result.user).toContain("src/file-b.ts");
@@ -147,7 +147,7 @@ describe("buildReviewPrompt", () => {
 
   it("system prompt contains category definitions", () => {
     const chunk = createReviewChunk();
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.system).toContain("SECURITY");
     expect(result.system).toContain("BUGS");
@@ -158,7 +158,7 @@ describe("buildReviewPrompt", () => {
 
   it("system prompt contains severity definitions", () => {
     const chunk = createReviewChunk();
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.system).toContain("CRITICAL");
     expect(result.system).toContain("WARNING");
@@ -168,7 +168,7 @@ describe("buildReviewPrompt", () => {
 
   it("system prompt contains output format instructions", () => {
     const chunk = createReviewChunk();
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.system).toContain("JSON");
     expect(result.system).toContain("filePath");
@@ -177,7 +177,7 @@ describe("buildReviewPrompt", () => {
   });
 
   it("system prompt asks for new-file line numbers, never old ones", () => {
-    const result = buildReviewPrompt(createReviewChunk());
+    const result = buildReviewPrompt(createReviewChunk(), "");
 
     expect(result.system).toContain("`old L<n>`");
     expect(result.system).toContain(
@@ -189,8 +189,28 @@ describe("buildReviewPrompt", () => {
     const chunk = createReviewChunk({
       files: [createFileReviewContext({ language: null })],
     });
-    const result = buildReviewPrompt(chunk);
+    const result = buildReviewPrompt(chunk, "");
 
     expect(result.user).toContain("unknown");
+  });
+
+  it("leaves the system prompt unchanged without custom instructions", () => {
+    const withoutInstructions = buildReviewPrompt(createReviewChunk(), "");
+
+    expect(withoutInstructions.system).not.toContain("Repository Instructions");
+    expect(withoutInstructions.system).toBe(
+      buildReviewPrompt(createReviewChunk(), "   ").system,
+    );
+  });
+
+  it("adds the repository's custom instructions to the system prompt", () => {
+    const result = buildReviewPrompt(
+      createReviewChunk(),
+      "Prefer early returns.",
+    );
+
+    expect(result.system).toContain("## Repository Instructions");
+    expect(result.system).toContain("Prefer early returns.");
+    expect(result.user).not.toContain("Prefer early returns.");
   });
 });

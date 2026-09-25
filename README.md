@@ -13,6 +13,7 @@ A GitHub App that automatically reviews pull requests using AST-aware analysis a
 - **Delta reviews** — Only reviews files changed since the last reviewed commit (not the entire PR again)
 - **Background processing** — BullMQ job queue with retry logic and dead letter handling
 - **Dashboard** — OAuth-protected UI to manage repos, view review history, and configure settings
+- **Per-repository settings** — Enabled categories, minimum severity, excluded paths (globs) and custom review instructions apply to every review
 
 ## Architecture
 
