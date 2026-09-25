@@ -3,6 +3,8 @@ import type { ReviewChunk, ReviewResult } from "@/types/review";
 
 export type LLMError =
   | "LLM_API_KEY_MISSING"
+  | "LLM_AUTH_FAILED"
+  | "LLM_BAD_REQUEST"
   | "LLM_RATE_LIMITED"
   | "LLM_TIMEOUT"
   | "LLM_INVALID_RESPONSE"

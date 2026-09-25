@@ -44,7 +44,8 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
       }
 
       if (sdkClient === null) {
-        sdkClient = new LlmSdk({ apiKey });
+        // Retries happen in callWithRetry only, so SDK retries would multiply them.
+        sdkClient = new LlmSdk({ apiKey, maxRetries: 0 });
       }
 
       const prompt = buildReviewPrompt(chunk);
@@ -183,6 +184,12 @@ function mapSdkError(error: unknown): LLMError {
   if (error instanceof LlmSdk.APIConnectionTimeoutError) {
     return "LLM_TIMEOUT";
   }
+  if (
+    error instanceof LlmSdk.AuthenticationError ||
+    error instanceof LlmSdk.PermissionDeniedError
+  ) {
+    return "LLM_AUTH_FAILED";
+  }
   if (error instanceof LlmSdk.BadRequestError) {
     const message = error.message ?? "";
     if (
@@ -192,11 +199,15 @@ function mapSdkError(error: unknown): LLMError {
     ) {
       return "LLM_CONTEXT_TOO_LONG";
     }
-    return "LLM_UNKNOWN_ERROR";
+    return "LLM_BAD_REQUEST";
   }
-  if (error instanceof LlmSdk.InternalServerError) {
-    return "LLM_UNKNOWN_ERROR";
+  if (
+    error instanceof LlmSdk.NotFoundError ||
+    error instanceof LlmSdk.UnprocessableEntityError
+  ) {
+    return "LLM_BAD_REQUEST";
   }
+  // Server errors, overload and dropped connections can pass on a retry.
   return "LLM_UNKNOWN_ERROR";
 }
 

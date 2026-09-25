@@ -35,13 +35,27 @@ class MockInternalServerError extends Error {
   }
 }
 
+class MockAuthenticationError extends Error {}
+class MockPermissionDeniedError extends Error {}
+class MockNotFoundError extends Error {}
+class MockUnprocessableEntityError extends Error {}
+
+const sdkOptions: unknown[] = [];
+
 vi.mock("@anthropic-ai/sdk", () => {
   class MockSdk {
+    constructor(options: unknown) {
+      sdkOptions.push(options);
+    }
     messages = { create: mockCreate };
     static RateLimitError = MockRateLimitError;
     static APIConnectionTimeoutError = MockAPIConnectionTimeoutError;
     static BadRequestError = MockBadRequestError;
     static InternalServerError = MockInternalServerError;
+    static AuthenticationError = MockAuthenticationError;
+    static PermissionDeniedError = MockPermissionDeniedError;
+    static NotFoundError = MockNotFoundError;
+    static UnprocessableEntityError = MockUnprocessableEntityError;
   }
   return { default: MockSdk };
 });
@@ -162,6 +176,48 @@ describe("createLlmClient", () => {
 
     expect(parser.parseLlmReviewResponse).toHaveBeenCalledWith("[]", 0.7);
     expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
+  it("turns off the SDK's own retries so a chunk is retried only here", async () => {
+    mockSuccessfulResponse();
+    const service = createLlmClient({ apiKey: "test-key" });
+    await service.analyzeReviewChunk(createReviewChunk());
+
+    expect(sdkOptions.at(-1)).toEqual(
+      expect.objectContaining({ maxRetries: 0 }),
+    );
+  });
+
+  it.each([
+    [
+      "an invalid API key",
+      new MockAuthenticationError("401"),
+      "LLM_AUTH_FAILED",
+    ],
+    [
+      "a denied permission",
+      new MockPermissionDeniedError("403"),
+      "LLM_AUTH_FAILED",
+    ],
+    ["an unknown model", new MockNotFoundError("404"), "LLM_BAD_REQUEST"],
+    [
+      "an unprocessable request",
+      new MockUnprocessableEntityError("422"),
+      "LLM_BAD_REQUEST",
+    ],
+    [
+      "another bad request",
+      new MockBadRequestError("messages: invalid"),
+      "LLM_BAD_REQUEST",
+    ],
+  ])("does not retry %s", async (_label, error, expected) => {
+    mockCreate.mockRejectedValueOnce(error);
+    const service = createLlmClient({ apiKey: "test-key" });
+
+    const result = await service.analyzeReviewChunk(createReviewChunk());
+
+    expect(result).toEqual({ success: false, error: expected });
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
   it("returns LLM_INVALID_RESPONSE when SDK returns no text block", async () => {
