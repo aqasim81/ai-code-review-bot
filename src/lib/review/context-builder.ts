@@ -61,13 +61,15 @@ export function buildReviewContext(
 
   // A file larger than a whole chunk cannot be sent in one request, and would
   // fail the review on every attempt; skip it and report it instead.
-  const prioritized = prioritizeFiles(fileContexts);
-  const fitting = prioritized.filter(
-    (file) => estimateFileTokenCount(file) <= maxTokens,
-  );
-  const oversizedFilePaths = prioritized
-    .filter((file) => estimateFileTokenCount(file) > maxTokens)
-    .map((file) => file.filePath);
+  const fitting: FileReviewContext[] = [];
+  const oversizedFilePaths: string[] = [];
+  for (const file of prioritizeFiles(fileContexts)) {
+    if (estimateFileTokenCount(file) > maxTokens) {
+      oversizedFilePaths.push(file.filePath);
+    } else {
+      fitting.push(file);
+    }
+  }
 
   return ok({
     chunks: chunkFileContexts(fitting, maxTokens),

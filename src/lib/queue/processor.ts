@@ -31,9 +31,9 @@ const UNRECOVERABLE_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
   "REVIEW_POST_REJECTED",
 ]);
 
-function describeReviewFailure(error: ReviewEngineError): string {
-  return `Review failed: ${error}`;
-}
+// Names the error thrown for a rate-limited review, so the backoff strategy,
+// which receives that error, can wait for the limit to reset.
+const GITHUB_RATE_LIMITED_ERROR_NAME = "GitHubRateLimitedReviewError";
 
 async function fetchChangedFilesForDelta(
   baseCommitSha: string,
@@ -295,9 +295,14 @@ export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {
     pullRequest: payload.pullRequestNumber,
   });
   await markJobFailed(dbJobId, result.error, job.attemptsMade + 1);
-  const message = describeReviewFailure(result.error);
+  const message = `Review failed: ${result.error}`;
   if (UNRECOVERABLE_REVIEW_ERRORS.has(result.error)) {
     throw new UnrecoverableError(message);
+  }
+  if (result.error === "REVIEW_GITHUB_RATE_LIMITED") {
+    throw Object.assign(new Error(message), {
+      name: GITHUB_RATE_LIMITED_ERROR_NAME,
+    });
   }
   throw new Error(message);
 }
@@ -310,7 +315,7 @@ export function calculateBackoffDelay(
   attemptsMade: number,
   error?: Error,
 ): number {
-  if (error?.message === describeReviewFailure("REVIEW_GITHUB_RATE_LIMITED")) {
+  if (error?.name === GITHUB_RATE_LIMITED_ERROR_NAME) {
     return GITHUB_RATE_LIMIT_RETRY_DELAY_MS;
   }
   const BASE_DELAY_MS = 10_000;

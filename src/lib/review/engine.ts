@@ -218,14 +218,24 @@ function logClaimLost(claim: ReviewClaimRef, step: string): void {
   });
 }
 
+const GITHUB_STEP_ERRORS = {
+  diff: {
+    rejected: "REVIEW_DIFF_UNAVAILABLE",
+    retryable: "REVIEW_DIFF_FETCH_FAILED",
+  },
+  post: { rejected: "REVIEW_POST_REJECTED", retryable: "REVIEW_POST_FAILED" },
+} as const satisfies Record<
+  string,
+  { rejected: ReviewEngineError; retryable: ReviewEngineError }
+>;
+
 /**
  * Keeps why a GitHub call failed, so the queue can tell a failure no retry can
- * fix (`rejectedCode`) and a rate limit from one worth retrying soon.
+ * fix from a rate limit and from one worth retrying soon.
  */
 function reviewErrorForGitHubFailure(
   error: GitHubError,
-  rejectedCode: ReviewEngineError,
-  retryableCode: ReviewEngineError,
+  step: keyof typeof GITHUB_STEP_ERRORS,
 ): ReviewEngineError {
   if (error === "GITHUB_RATE_LIMITED") return "REVIEW_GITHUB_RATE_LIMITED";
   if (
@@ -233,9 +243,9 @@ function reviewErrorForGitHubFailure(
     error === "GITHUB_FORBIDDEN" ||
     error === "GITHUB_REQUEST_REJECTED"
   ) {
-    return rejectedCode;
+    return GITHUB_STEP_ERRORS[step].rejected;
   }
-  return retryableCode;
+  return GITHUB_STEP_ERRORS[step].retryable;
 }
 
 const REJECTED_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
@@ -260,13 +270,7 @@ async function fetchAndParseDiff(
   if (!diffResult.success) {
     logger.error("Failed to fetch diff", { error: diffResult.error });
     await markReviewFailed(claim, "Failed to fetch PR diff");
-    return err(
-      reviewErrorForGitHubFailure(
-        diffResult.error,
-        "REVIEW_DIFF_UNAVAILABLE",
-        "REVIEW_DIFF_FETCH_FAILED",
-      ),
-    );
+    return err(reviewErrorForGitHubFailure(diffResult.error, "diff"));
   }
 
   const parsedDiffResult = parseUnifiedDiff(diffResult.data);
@@ -415,7 +419,8 @@ interface LlmAnalysisResult {
 
 const MAX_LISTED_OVERSIZED_FILES = 10;
 
-function describeOversizedFiles(filePaths: readonly string[]): string {
+function describeOversizedFiles(filePaths: readonly string[]): string | null {
+  if (filePaths.length === 0) return null;
   const listed = filePaths
     .slice(0, MAX_LISTED_OVERSIZED_FILES)
     .map((filePath) => `\`${filePath}\``)
@@ -553,13 +558,7 @@ async function wasPostedByEarlierAttempt(
       claim,
       "Failed to check for an existing review on GitHub",
     );
-    return err(
-      reviewErrorForGitHubFailure(
-        lookupResult.error,
-        "REVIEW_POST_REJECTED",
-        "REVIEW_POST_FAILED",
-      ),
-    );
+    return err(reviewErrorForGitHubFailure(lookupResult.error, "post"));
   }
   if (lookupResult.data) {
     logger.info("Review already posted by an earlier attempt, not reposting", {
@@ -596,13 +595,7 @@ async function postReviewToGitHub(
       error: postResult.error,
     });
     await markReviewFailed(claim, "Failed to post review to GitHub");
-    return err(
-      reviewErrorForGitHubFailure(
-        postResult.error,
-        "REVIEW_POST_REJECTED",
-        "REVIEW_POST_FAILED",
-      ),
-    );
+    return err(reviewErrorForGitHubFailure(postResult.error, "post"));
   }
 
   logger.info("Review posted to GitHub", {
@@ -738,29 +731,23 @@ async function runReviewSteps(
     return err("REVIEW_LLM_FAILED");
   }
   const { chunks, oversizedFilePaths } = reviewContext.data;
+  const oversizedNote = describeOversizedFiles(oversizedFilePaths);
   if (chunks.length === 0) {
     return completeReviewEarly(
       claim,
       startTime,
-      oversizedFilePaths.length > 0
-        ? describeOversizedFiles(oversizedFilePaths)
-        : "No reviewable content after filtering.",
+      oversizedNote ?? "No reviewable content after filtering.",
     );
   }
 
-  return analyzeSaveAndPostReview(
-    context,
-    chunks,
-    parsedDiff,
-    oversizedFilePaths,
-  );
+  return analyzeSaveAndPostReview(context, chunks, parsedDiff, oversizedNote);
 }
 
 async function analyzeSaveAndPostReview(
   context: ReviewStepsContext,
   chunks: readonly ReviewChunk[],
   parsedDiff: ParsedDiff,
-  oversizedFilePaths: readonly string[],
+  oversizedNote: string | null,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
   const { claim, request, llmService, startTime } = context;
   const { reviewId } = claim;
@@ -771,10 +758,9 @@ async function analyzeSaveAndPostReview(
     return llmResult;
   }
   const { findings } = llmResult.data;
-  const summary =
-    oversizedFilePaths.length > 0
-      ? `${llmResult.data.summary}\n\n${describeOversizedFiles(oversizedFilePaths)}`
-      : llmResult.data.summary;
+  const summary = oversizedNote
+    ? `${llmResult.data.summary}\n\n${oversizedNote}`
+    : llmResult.data.summary;
 
   logger.info("LLM analysis complete", {
     findingCount: findings.length,

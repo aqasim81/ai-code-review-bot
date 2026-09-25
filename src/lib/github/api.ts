@@ -109,15 +109,18 @@ function isRateLimitResponse(error: Error): boolean {
   );
 }
 
-function classifyGitHubError(error: unknown): GitHubError {
-  if (!(error instanceof Error) || !("status" in error)) {
-    return "GITHUB_UNKNOWN_ERROR";
-  }
+function readResponseStatus(error: unknown): number | null {
+  if (!(error instanceof Error) || !("status" in error)) return null;
   const status = (error as Record<string, unknown>).status;
+  return typeof status === "number" ? status : null;
+}
+
+function classifyGitHubError(error: unknown): GitHubError {
+  const status = readResponseStatus(error);
   if (status === 401 || status === 400) return "GITHUB_AUTH_FAILED";
   if (status === 429) return "GITHUB_RATE_LIMITED";
   if (status === 403) {
-    return isRateLimitResponse(error)
+    return isRateLimitResponse(error as Error)
       ? "GITHUB_RATE_LIMITED"
       : "GITHUB_FORBIDDEN";
   }
@@ -129,11 +132,7 @@ function classifyGitHubError(error: unknown): GitHubError {
 }
 
 function isAuthError(error: unknown): boolean {
-  if (error instanceof Error && "status" in error) {
-    const statusValue = (error as Record<string, unknown>).status;
-    return statusValue === 401;
-  }
-  return false;
+  return readResponseStatus(error) === 401;
 }
 
 const RATE_LIMIT_THRESHOLD = 10;
