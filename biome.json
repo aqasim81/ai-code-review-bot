@@ -47,5 +47,105 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**", "worker/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "@/generated/prisma/client",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "error"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/lib/db/prisma-client",
+                      "**/prisma-client",
+                      "@/generated/prisma/client",
+                      "@prisma/client",
+                      "@prisma/client/**",
+                      "@prisma/adapter-pg"
+                    ],
+                    "message": "Invariant 3: database access goes through src/lib/db/queries.ts; import from there instead."
+                  },
+                  {
+                    "group": ["next", "next/**", "next-auth", "next-auth/**"],
+                    "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/db/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["next", "next/**", "next-auth", "next-auth/**"],
+                    "message": "Invariant 1: src/lib/ is framework-free TypeScript; keep Next.js imports in src/app or src/components."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/env.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
+    }
+  ]
 }
