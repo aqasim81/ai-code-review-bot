@@ -6,7 +6,14 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 6: Testing & Polish** — Complete. All 6 phases done. 237 tests across 19 files (unit: diff-parser, ast-parser, context-builder, comment-mapper, LLM parser/prompts/client, queue producer, user installations; integration: webhook-handler, webhook-route, review-pipeline, queue-processor). E2E tests with Playwright. Coverage: 87.7% statements, 85%+ on review/ and 93%+ on llm/. README with architecture diagram and setup guide. Repository settings (categories, minimum severity, exclude globs, custom instructions) apply to reviews (#94).
+**Phase 6: Testing & Polish** — Complete. All 6 phases done; now fixing bugs from GitHub Issues. 448 tests across 34 files (unit, integration, invariants) plus Playwright E2E. Coverage: 93% statements, 90% on review/, 97% on llm/.
+
+Behaviour worth knowing that isn't obvious from one file:
+- **Model:** set by `LLM_MODEL_ID`, default in `src/lib/env.ts`. The default model thinks by default and thinking counts toward the 16000-token output limit.
+- **Repository settings** (categories, minimum severity, exclude globs, custom instructions) shape the prompt: it lists only enabled categories, and the settings filter drops the rest as a backstop. With every category enabled, the prompt must stay byte-for-byte equal to `tests/fixtures/default-system-prompt.txt`.
+- **Partial reviews:** a chunk the model rejects, or one still failing on the job's final attempt (`ReviewRequest.isFinalAttempt`), is left out and named in the summary. A reply cut off at the output limit is noted in the summary too.
+- **Superseded reviews:** before posting, the engine checks the PR head. A review of a replaced commit is `SUPERSEDED`: not posted, findings dropped, never a base for push (delta) reviews.
+- **Final statuses:** a deleted or suspended installation (404/403 on the token request) skips the job. The worker's `failed` handler marks unfinished job records FAILED, because BullMQ fails a job that stalled too often without running the processor.
 
 ## Tech Stack
 
