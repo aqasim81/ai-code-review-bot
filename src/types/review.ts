@@ -98,6 +98,12 @@ export interface ReviewChunk {
   readonly estimatedTokenCount: number;
 }
 
+export interface ReviewContext {
+  readonly chunks: readonly ReviewChunk[];
+  /** Files too large for one request; they are skipped and named in the summary. */
+  readonly oversizedFilePaths: readonly string[];
+}
+
 // --- LLM output types ---
 
 export interface ReviewFinding {

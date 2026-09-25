@@ -32,8 +32,7 @@ import { err, ok } from "@/types/results";
 
 // A new file with enough added lines (~24k estimated tokens) that two of them
 // cannot share one 30k-token review chunk, with margin either way.
-function largeAddedFileDiff(filePath: string): string {
-  const lineCount = 800;
+function largeAddedFileDiff(filePath: string, lineCount = 800): string {
   const lines = Array.from(
     { length: lineCount },
     (_, index) => `+export const value${index} = "${"x".repeat(80)}";`,
@@ -421,6 +420,49 @@ describe("executeReview — review pipeline", () => {
       .body;
     expect(body).toContain("Found 2 issues in this review.");
     expect(body).not.toContain("Found 1 issue");
+  });
+
+  it("reviews the rest of the pull request and names a file too large to review", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            `${largeAddedFileDiff("data/huge.json", 1300)}${SINGLE_FILE_TYPESCRIPT_DIFF}`,
+          ),
+        ),
+    });
+    const llm = createMockLlmService();
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
+    const sentPaths = vi
+      .mocked(llm.analyzeReviewChunk)
+      .mock.calls[0]?.[0].files.map((file) => file.filePath);
+    expect(sentPaths).not.toContain("data/huge.json");
+    expect(result.success && result.data.summary).toContain(
+      "Not reviewed because they are too large: `data/huge.json`.",
+    );
+  });
+
+  it("completes without analysis when every changed file is too large", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(largeAddedFileDiff("data/huge.json", 1300))),
+    });
+    const llm = createMockLlmService();
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        summary: "Not reviewed because they are too large: `data/huge.json`.",
+      }),
+    });
   });
 
   it("says no issues were found when the analysis returns no findings", async () => {
