@@ -3,10 +3,8 @@ import { auth } from "@/auth";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/dashboard/settings-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  findInstallationsByGitHubIds,
-  findRepositoryByIdForInstallations,
-} from "@/lib/db/queries";
+import { findAccessibleRepositoryById } from "@/lib/db/queries";
+import { canManageRepository } from "@/lib/github/repository-access";
 import type { RepositoryId } from "@/types/branded";
 import { mergeWithDefaults } from "@/types/settings";
 
@@ -19,26 +17,13 @@ export default async function RepoSettingsPage({
 }: RepoSettingsPageProps) {
   const { id } = await params;
   const session = await auth();
-  if (!session?.installationIds) {
+  if (!session) {
     redirect("/");
   }
 
-  const installationsResult = await findInstallationsByGitHubIds(
-    session.installationIds,
-  );
-
-  if (!installationsResult.success) {
-    return (
-      <div>
-        <PageHeader title="Repository Settings" />
-        <p className="text-destructive">Failed to load installations.</p>
-      </div>
-    );
-  }
-
-  const repoResult = await findRepositoryByIdForInstallations(
+  const repoResult = await findAccessibleRepositoryById(
     id as RepositoryId,
-    installationsResult.data.map((i) => i.id),
+    session.access,
   );
 
   if (!repoResult.success || !repoResult.data) {
@@ -63,6 +48,7 @@ export default async function RepoSettingsPage({
         <CardContent>
           <SettingsForm
             repositoryId={repo.id}
+            canManage={canManageRepository(session.access, repo.githubRepoId)}
             initialSettings={{
               enabledCategories: settings.enabledCategories,
               minimumSeverity: settings.minimumSeverity,

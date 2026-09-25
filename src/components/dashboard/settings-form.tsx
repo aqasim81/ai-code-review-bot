@@ -32,6 +32,7 @@ const SEVERITIES = [
 
 interface SettingsFormProps {
   readonly repositoryId: string;
+  readonly canManage: boolean;
   readonly initialSettings: {
     enabledCategories: readonly string[];
     minimumSeverity: string;
@@ -42,6 +43,7 @@ interface SettingsFormProps {
 
 export function SettingsForm({
   repositoryId,
+  canManage,
   initialSettings,
 }: SettingsFormProps) {
   const nextPatternIdRef = useRef(initialSettings.excludePatterns.length);
@@ -89,120 +91,132 @@ export function SettingsForm({
   }
 
   return (
-    <form action={formAction} className="space-y-8">
-      <div className="space-y-4">
-        <Label className="text-base font-semibold">Review Categories</Label>
-        <p className="text-sm text-muted-foreground">
-          Select which categories of issues to check for.
+    <form action={formAction}>
+      {!canManage && (
+        <p className="mb-6 text-sm text-muted-foreground">
+          You can view these settings. Changing them requires admin or maintain
+          permission on the repository.
         </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {CATEGORIES.map((category) => (
-            <div key={category.value} className="flex items-center gap-2">
-              <Checkbox
-                id={`category-${category.value}`}
-                name="enabledCategories"
-                value={category.value}
-                defaultChecked={initialSettings.enabledCategories.includes(
-                  category.value,
-                )}
-              />
-              <Label
-                htmlFor={`category-${category.value}`}
-                className="font-normal"
-              >
-                {category.label}
-              </Label>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="minimumSeverity" className="text-base font-semibold">
-          Minimum Severity
-        </Label>
-        <p className="text-sm text-muted-foreground">
-          Only post comments at or above this severity level.
-        </p>
-        <Select value={minimumSeverity} onValueChange={setMinimumSeverity}>
-          <SelectTrigger id="minimumSeverity" className="w-[280px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SEVERITIES.map((severity) => (
-              <SelectItem key={severity.value} value={severity.value}>
-                {severity.label}
-              </SelectItem>
+      )}
+      <fieldset disabled={!canManage} className="space-y-8">
+        <div className="space-y-4">
+          <Label className="text-base font-semibold">Review Categories</Label>
+          <p className="text-sm text-muted-foreground">
+            Select which categories of issues to check for.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {CATEGORIES.map((category) => (
+              <div key={category.value} className="flex items-center gap-2">
+                <Checkbox
+                  id={`category-${category.value}`}
+                  name="enabledCategories"
+                  value={category.value}
+                  defaultChecked={initialSettings.enabledCategories.includes(
+                    category.value,
+                  )}
+                />
+                <Label
+                  htmlFor={`category-${category.value}`}
+                  className="font-normal"
+                >
+                  {category.label}
+                </Label>
+              </div>
             ))}
-          </SelectContent>
-        </Select>
-      </div>
+          </div>
+        </div>
 
-      <div className="space-y-3">
-        <Label className="text-base font-semibold">File Exclusions</Label>
-        <p className="text-sm text-muted-foreground">
-          Glob patterns for files to skip during review (e.g., *.lock, dist/**)
-        </p>
         <div className="space-y-2">
-          {excludePatterns.map((pattern) => (
-            <div key={pattern.id} className="flex items-center gap-2">
-              <Input
-                value={pattern.value}
-                onChange={(event) =>
-                  updateExcludePattern(pattern.id, event.target.value)
-                }
-                placeholder="e.g., *.lock"
-                className="max-w-xs"
-              />
+          <Label htmlFor="minimumSeverity" className="text-base font-semibold">
+            Minimum Severity
+          </Label>
+          <p className="text-sm text-muted-foreground">
+            Only post comments at or above this severity level.
+          </p>
+          <Select value={minimumSeverity} onValueChange={setMinimumSeverity}>
+            <SelectTrigger id="minimumSeverity" className="w-[280px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SEVERITIES.map((severity) => (
+                <SelectItem key={severity.value} value={severity.value}>
+                  {severity.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-3">
+          <Label className="text-base font-semibold">File Exclusions</Label>
+          <p className="text-sm text-muted-foreground">
+            Glob patterns for files to skip during review (e.g., *.lock,
+            dist/**)
+          </p>
+          <div className="space-y-2">
+            {excludePatterns.map((pattern) => (
+              <div key={pattern.id} className="flex items-center gap-2">
+                <Input
+                  value={pattern.value}
+                  onChange={(event) =>
+                    updateExcludePattern(pattern.id, event.target.value)
+                  }
+                  placeholder="e.g., *.lock"
+                  className="max-w-xs"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeExcludePattern(pattern.id)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            {excludePatterns.length < 20 && (
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                onClick={() => removeExcludePattern(pattern.id)}
+                onClick={addExcludePattern}
               >
-                Remove
+                Add pattern
               </Button>
-            </div>
-          ))}
-          {excludePatterns.length < 20 && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={addExcludePattern}
-            >
-              Add pattern
-            </Button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="customInstructions" className="text-base font-semibold">
-          Custom Instructions
-        </Label>
-        <p className="text-sm text-muted-foreground">
-          Additional instructions appended to the review prompt (max 2000
-          characters).
-        </p>
-        <Textarea
-          id="customInstructions"
-          name="customInstructions"
-          defaultValue={initialSettings.customInstructions}
-          placeholder="e.g., Focus on error handling in async functions..."
-          rows={4}
-          maxLength={2000}
-          className="max-w-lg"
-        />
-      </div>
+        <div className="space-y-2">
+          <Label
+            htmlFor="customInstructions"
+            className="text-base font-semibold"
+          >
+            Custom Instructions
+          </Label>
+          <p className="text-sm text-muted-foreground">
+            Additional instructions appended to the review prompt (max 2000
+            characters).
+          </p>
+          <Textarea
+            id="customInstructions"
+            name="customInstructions"
+            defaultValue={initialSettings.customInstructions}
+            placeholder="e.g., Focus on error handling in async functions..."
+            rows={4}
+            maxLength={2000}
+            className="max-w-lg"
+          />
+        </div>
 
-      {!state.success && state.error && (
-        <p className="text-sm text-destructive">{state.error}</p>
-      )}
+        {!state.success && state.error && (
+          <p className="text-sm text-destructive">{state.error}</p>
+        )}
 
-      <Button type="submit" disabled={isPending}>
-        {isPending ? "Saving..." : "Save Settings"}
-      </Button>
+        <Button type="submit" disabled={isPending}>
+          {isPending ? "Saving..." : "Save Settings"}
+        </Button>
+      </fieldset>
     </form>
   );
 }

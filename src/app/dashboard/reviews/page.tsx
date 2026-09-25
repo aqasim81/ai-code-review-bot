@@ -12,8 +12,8 @@ import {
 } from "@/generated/prisma/enums";
 import {
   findInstallationsByGitHubIds,
-  listRepositoriesForInstallation,
-  listReviewsForInstallation,
+  listRepositoriesInScope,
+  listReviewsInScope,
 } from "@/lib/db/queries";
 import type { RepositoryId } from "@/types/branded";
 
@@ -30,12 +30,12 @@ const VALID_STATUSES = new Set<string>(Object.values(ReviewStatusValues));
 export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
   const params = await searchParams;
   const session = await auth();
-  if (!session?.installationIds) {
+  if (!session) {
     redirect("/");
   }
 
   const installationsResult = await findInstallationsByGitHubIds(
-    session.installationIds,
+    session.access.githubInstallationIds,
   );
 
   if (!installationsResult.success || installationsResult.data.length === 0) {
@@ -53,15 +53,10 @@ export default async function ReviewsPage({ searchParams }: ReviewsPageProps) {
     );
   }
 
-  const firstInstallation = installationsResult.data[0];
-  if (!firstInstallation) {
-    redirect("/");
-  }
-
   const [reposResult, reviewsResult] = await Promise.all([
-    listRepositoriesForInstallation(firstInstallation.id),
-    listReviewsForInstallation({
-      installationId: firstInstallation.id,
+    listRepositoriesInScope(session.access),
+    listReviewsInScope({
+      scope: session.access,
       repositoryId: params.repo ? (params.repo as RepositoryId) : undefined,
       status:
         params.status && VALID_STATUSES.has(params.status)

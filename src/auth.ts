@@ -1,7 +1,11 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
 import { env } from "@/lib/env";
-import { fetchUserInstallationIds } from "@/lib/github/user-installations";
+import {
+  EMPTY_USER_ACCESS,
+  parseUserAccess,
+} from "@/lib/github/repository-access";
+import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
 import { logger } from "@/lib/logger";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -28,14 +32,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.accessToken = account.access_token ?? undefined;
 
         if (account.access_token) {
-          const result = await fetchUserInstallationIds(account.access_token);
+          const result = await fetchUserRepositoryAccess(account.access_token);
           if (result.success) {
-            token.installationIds = [...result.data];
+            token.access = result.data;
           } else {
-            logger.warn("Failed to fetch user installations at sign-in", {
+            logger.warn("Failed to fetch user repository access at sign-in", {
               error: result.error,
             });
-            token.installationIds = [];
+            token.access = EMPTY_USER_ACCESS;
           }
         }
       }
@@ -47,9 +51,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.login = typeof token.login === "string" ? token.login : "";
       session.user.avatarUrl =
         typeof token.avatarUrl === "string" ? token.avatarUrl : "";
-      session.installationIds = Array.isArray(token.installationIds)
-        ? (token.installationIds as number[])
-        : [];
+      session.access = parseUserAccess(token.access);
       return session;
     },
   },

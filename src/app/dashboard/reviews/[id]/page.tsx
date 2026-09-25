@@ -6,10 +6,7 @@ import { STATUS_VARIANT } from "@/components/dashboard/review-constants";
 import { ReviewDetail } from "@/components/dashboard/review-detail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  findInstallationsByGitHubIds,
-  getReviewWithCommentsForInstallations,
-} from "@/lib/db/queries";
+import { getReviewWithCommentsInScope } from "@/lib/db/queries";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import type { ReviewId } from "@/types/branded";
 
@@ -22,26 +19,13 @@ export default async function ReviewDetailPage({
 }: ReviewDetailPageProps) {
   const { id } = await params;
   const session = await auth();
-  if (!session?.installationIds) {
+  if (!session) {
     redirect("/");
   }
 
-  const installationsResult = await findInstallationsByGitHubIds(
-    session.installationIds,
-  );
-
-  if (!installationsResult.success) {
-    return (
-      <div>
-        <PageHeader title="Review Details" />
-        <p className="text-destructive">Failed to load review.</p>
-      </div>
-    );
-  }
-
-  const reviewResult = await getReviewWithCommentsForInstallations(
+  const reviewResult = await getReviewWithCommentsInScope(
     id as ReviewId,
-    installationsResult.data.map((i) => i.id),
+    session.access,
   );
 
   if (!reviewResult.success || !reviewResult.data) {
