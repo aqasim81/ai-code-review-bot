@@ -8,6 +8,12 @@ import type { QueueError } from "@/types/errors";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 
+/**
+ * How long an enqueue may wait for Valkey. GitHub gives up on a webhook
+ * delivery after 10 s; failing earlier lets the route answer 500 and log it.
+ */
+const ENQUEUE_TIMEOUT_MS = 5_000;
+
 const globalForQueue = globalThis as unknown as {
   reviewQueue: Queue | undefined;
 };
@@ -24,7 +30,14 @@ export const REVIEW_JOB_OPTIONS = {
 function getReviewQueue(): Queue {
   if (!globalForQueue.reviewQueue) {
     globalForQueue.reviewQueue = new Queue(REVIEW_QUEUE_NAME, {
-      connection: createValkeyConnectionOptions(),
+      // The producer answers a webhook, so a command sent while Valkey is
+      // unreachable is rejected rather than held until it comes back
+      // (ioredis keeps it in its offline queue otherwise). The worker's
+      // connections keep waiting.
+      connection: {
+        ...createValkeyConnectionOptions(),
+        enableOfflineQueue: false,
+      },
       defaultJobOptions: REVIEW_JOB_OPTIONS,
     });
   }
@@ -66,6 +79,28 @@ async function findLiveJobWithSameId(
   return null;
 }
 
+/**
+ * Rejects once `timeoutMs` passes. BullMQ waits for the first connection to
+ * Valkey without a limit, so without this an enqueue made while Valkey is down
+ * never settles.
+ */
+async function withEnqueueTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Valkey did not answer within ${timeoutMs} ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The fields every log line about a review job carries. */
 export function reviewJobLogContext(
   jobId: string | undefined,
@@ -79,6 +114,22 @@ export function reviewJobLogContext(
   };
 }
 
+type AddJobOutcome =
+  | { readonly kind: "already-queued" }
+  | { readonly kind: "added"; readonly jobId: string };
+
+async function addJobUnlessLive(
+  queue: Queue,
+  jobData: ReviewJobData,
+  jobId: string,
+): Promise<AddJobOutcome> {
+  if (await findLiveJobWithSameId(queue, jobId)) {
+    return { kind: "already-queued" };
+  }
+  const job = await queue.add(jobData.type, jobData, { jobId });
+  return { kind: "added", jobId: job.id ?? jobId };
+}
+
 async function enqueueJob(
   jobData: ReviewJobData,
 ): Promise<Result<{ jobId: string }, QueueError>> {
@@ -89,15 +140,19 @@ async function enqueueJob(
   };
 
   try {
-    const queue = getReviewQueue();
-    if (await findLiveJobWithSameId(queue, jobId)) {
+    // One deadline covers every Valkey step, so their waits cannot add up
+    // past GitHub's delivery timeout.
+    const outcome = await withEnqueueTimeout(
+      addJobUnlessLive(getReviewQueue(), jobData, jobId),
+      ENQUEUE_TIMEOUT_MS,
+    );
+    if (outcome.kind === "already-queued") {
       logger.info("Review job already queued or done, skipping", logContext);
       return ok({ jobId });
     }
 
-    const job = await queue.add(jobData.type, jobData, { jobId });
     logger.info("Review job enqueued", logContext);
-    return ok({ jobId: job.id ?? jobId });
+    return ok({ jobId: outcome.jobId });
   } catch (error) {
     logger.error("Failed to enqueue review job", {
       ...logContext,
