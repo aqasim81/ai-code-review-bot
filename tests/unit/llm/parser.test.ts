@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseLlmReviewResponse } from "@/lib/llm/parser";
+import {
+  parseLlmReviewResponse,
+  parseTruncatedLlmReviewResponse,
+} from "@/lib/llm/parser";
 import {
   EMPTY_ARRAY,
   INVALID_CATEGORY,
@@ -225,5 +228,58 @@ describe("parseLlmReviewResponse", () => {
     // 1 valid + 2 invalid = 1 returned
     expect(result.data).toHaveLength(1);
     expect(result.data[0]?.message).toBe("Valid finding");
+  });
+});
+
+describe("parseTruncatedLlmReviewResponse", () => {
+  const complete = (message: string) =>
+    JSON.stringify({
+      filePath: "src/a.ts",
+      lineNumber: 3,
+      category: "BUGS",
+      severity: "WARNING",
+      message,
+      suggestion: "Fix it.",
+      confidence: 0.9,
+    });
+
+  it("keeps the complete findings before the cut and drops the partial one", () => {
+    const text = `\`\`\`json\n[${complete('Braces } ] and a "quote" inside')}, ${complete("second")}, {"filePath": "src/b.ts", "message": "cut of`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual([
+      'Braces } ] and a "quote" inside',
+      "second",
+    ]);
+  });
+
+  it("parses a reply whose array is complete", () => {
+    const result = parseTruncatedLlmReviewResponse(`[${complete("only")}]`);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toHaveLength(1);
+  });
+
+  it("applies the confidence threshold to recovered findings", () => {
+    const result = parseTruncatedLlmReviewResponse(
+      `[${complete("kept")}, {"filePath": "src/b.ts"`,
+      0.95,
+    );
+
+    expect(result).toEqual({ success: true, data: [] });
+  });
+
+  it.each([
+    ["no complete finding", '[{"filePath": "src/a.ts", "message": "cut'],
+    ["no array", "I could not review this because"],
+  ])("returns LLM_INVALID_RESPONSE when there is %s", (_label, text) => {
+    expect(parseTruncatedLlmReviewResponse(text)).toEqual({
+      success: false,
+      error: "LLM_INVALID_RESPONSE",
+    });
   });
 });

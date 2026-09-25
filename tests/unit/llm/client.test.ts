@@ -58,6 +58,10 @@ vi.mock("@/lib/llm/parser", () => ({
     success: true,
     data: [createReviewFinding()],
   }),
+  parseTruncatedLlmReviewResponse: vi.fn().mockReturnValue({
+    success: true,
+    data: [createReviewFinding()],
+  }),
 }));
 
 describe("createLlmClient", () => {
@@ -124,6 +128,40 @@ describe("createLlmClient", () => {
     expect(result.data.findings).toHaveLength(1);
     expect(result.data.tokenUsage.inputTokens).toBe(100);
     expect(result.data.tokenUsage.outputTokens).toBe(50);
+  });
+
+  it("keeps the complete findings of a reply cut off at the output limit", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: '[{"filePath": "src/a.ts"' }],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 100, output_tokens: 4096 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(createReviewChunk());
+
+    expect(result.success).toBe(true);
+    expect(parser.parseTruncatedLlmReviewResponse).toHaveBeenCalledWith(
+      '[{"filePath": "src/a.ts"',
+      0.7,
+    );
+    expect(parser.parseLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
+  it("parses a reply that ended normally with the strict parser", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "[]" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 100, output_tokens: 5 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    await service.analyzeReviewChunk(createReviewChunk());
+
+    expect(parser.parseLlmReviewResponse).toHaveBeenCalledWith("[]", 0.7);
+    expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
   });
 
   it("returns LLM_INVALID_RESPONSE when SDK returns no text block", async () => {

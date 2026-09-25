@@ -42,13 +42,83 @@ export function parseLlmReviewResponse(
     return err("LLM_INVALID_RESPONSE");
   }
 
+  return ok(validateFindings(parsed, threshold));
+}
+
+/**
+ * Parses a reply cut off at the output token limit: keeps the findings that
+ * were complete before the cut and drops the partial one.
+ */
+export function parseTruncatedLlmReviewResponse(
+  responseText: string,
+  confidenceThreshold?: number,
+): Result<readonly ReviewFinding[], LLMError> {
+  const arrayStart = responseText.indexOf("[");
+  if (arrayStart === -1) {
+    return err("LLM_INVALID_RESPONSE");
+  }
+
+  const completeEnd = findEndOfCompleteItems(responseText, arrayStart);
+  if (completeEnd === null) {
+    return err("LLM_INVALID_RESPONSE");
+  }
+
+  const repaired = `${responseText.slice(arrayStart, completeEnd.index + 1)}${completeEnd.arrayClosed ? "" : "]"}`;
+  return parseLlmReviewResponse(repaired, confidenceThreshold);
+}
+
+interface CompleteItemsEnd {
+  readonly index: number;
+  readonly arrayClosed: boolean;
+}
+
+/**
+ * Scans JSON text from the opening "[" and returns where the last complete
+ * array item ends, or where the array closes. Brackets inside strings are
+ * ignored.
+ */
+function findEndOfCompleteItems(
+  text: string,
+  arrayStart: number,
+): CompleteItemsEnd | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let lastItemEnd: number | null = null;
+
+  for (let i = arrayStart; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{" || char === "[") depth++;
+    else if (char === "}" || char === "]") {
+      depth--;
+      if (depth === 0) return { index: i, arrayClosed: true };
+      if (depth === 1) lastItemEnd = i;
+    }
+  }
+
+  return lastItemEnd === null
+    ? null
+    : { index: lastItemEnd, arrayClosed: false };
+}
+
+function validateFindings(
+  items: readonly unknown[],
+  threshold: number,
+): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
-  for (let i = 0; i < parsed.length; i++) {
-    const validated = validateFinding(parsed[i]);
+  for (let i = 0; i < items.length; i++) {
+    const validated = validateFinding(items[i]);
     if (validated === null) {
       logger.warn("Skipping invalid finding from LLM response", {
         index: i,
-        raw: JSON.stringify(parsed[i]),
+        raw: JSON.stringify(items[i]),
       });
       continue;
     }
@@ -56,8 +126,7 @@ export function parseLlmReviewResponse(
       findings.push(validated);
     }
   }
-
-  return ok(findings);
+  return findings;
 }
 
 function extractJsonFromResponse(text: string): string | null {
