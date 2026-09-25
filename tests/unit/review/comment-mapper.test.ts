@@ -92,6 +92,77 @@ describe("mapFindingsToGitHubComments", () => {
     expect(result.mappedComments[0]?.side).toBe("LEFT");
   });
 
+  it("prefers the added line over the removed line it replaces", () => {
+    const hunk = createDiffHunk({
+      lines: [
+        createDiffLine({
+          type: "removed",
+          content: "oldCall();",
+          oldLineNumber: 10,
+          newLineNumber: null,
+        }),
+        createDiffLine({
+          type: "added",
+          content: "newCall();",
+          oldLineNumber: null,
+          newLineNumber: 10,
+        }),
+      ],
+    });
+    const diff = createParsedDiff({
+      files: [createParsedDiffFile({ filePath: "src/a.ts", hunks: [hunk] })],
+    });
+    const finding = createReviewFinding({
+      filePath: "src/a.ts",
+      lineNumber: 10,
+    });
+
+    const result = mapFindingsToGitHubComments([finding], diff);
+
+    expect(result.mappedComments[0]?.side).toBe("RIGHT");
+    expect(result.mappedComments[0]?.line).toBe(10);
+  });
+
+  it("prefers a new-file line in a later hunk over a removed line in an earlier hunk", () => {
+    const removedHunk = createDiffHunk({
+      lines: [
+        createDiffLine({
+          type: "removed",
+          content: "unrelated();",
+          oldLineNumber: 50,
+          newLineNumber: null,
+        }),
+      ],
+    });
+    const addedHunk = createDiffHunk({
+      lines: [
+        createDiffLine({
+          type: "added",
+          content: "flagged();",
+          oldLineNumber: null,
+          newLineNumber: 50,
+        }),
+      ],
+    });
+    const diff = createParsedDiff({
+      files: [
+        createParsedDiffFile({
+          filePath: "src/a.ts",
+          hunks: [removedHunk, addedHunk],
+        }),
+      ],
+    });
+    const finding = createReviewFinding({
+      filePath: "src/a.ts",
+      lineNumber: 50,
+    });
+
+    const result = mapFindingsToGitHubComments([finding], diff);
+
+    expect(result.mappedComments[0]?.side).toBe("RIGHT");
+    expect(result.mappedComments[0]?.line).toBe(50);
+  });
+
   it("formats comment body with severity badge and category label", () => {
     const hunk = createDiffHunk({
       lines: [

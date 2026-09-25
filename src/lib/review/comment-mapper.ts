@@ -4,7 +4,6 @@ import type {
 } from "@/generated/prisma/enums";
 import type {
   CommentMappingResult,
-  DiffHunk,
   DiffLine,
   MappedReviewComment,
   ParsedDiff,
@@ -50,33 +49,45 @@ function findFileInDiff(
   );
 }
 
-function findLineInHunk(
-  hunk: DiffHunk,
-  lineNumber: number,
-): { line: DiffLine; side: "LEFT" | "RIGHT" } | undefined {
-  for (const line of hunk.lines) {
-    if (line.newLineNumber === lineNumber) {
-      const side = line.type === "removed" ? "LEFT" : "RIGHT";
-      return { line, side };
-    }
-    if (line.type === "removed" && line.oldLineNumber === lineNumber) {
-      return { line, side: "LEFT" };
-    }
+type LineMatch = {
+  line: DiffLine;
+  side: "LEFT" | "RIGHT";
+};
+
+function findLineWhere(
+  diffFile: ParsedDiffFile,
+  matches: (line: DiffLine) => boolean,
+  side: "LEFT" | "RIGHT",
+): LineMatch | undefined {
+  for (const hunk of diffFile.hunks) {
+    const line = hunk.lines.find(matches);
+    if (line) return { line, side };
   }
   return undefined;
 }
 
+/**
+ * Findings use new-file line numbers, so a line that exists in the new file
+ * (added or context) wins anywhere in the file. A removed line is matched by
+ * its old line number only when no new-file line has that number; otherwise a
+ * finding on a changed line would land on the deleted code it replaced.
+ */
 function findLineInFile(
   diffFile: ParsedDiffFile,
   lineNumber: number,
-): { hunk: DiffHunk; line: DiffLine; side: "LEFT" | "RIGHT" } | undefined {
-  for (const hunk of diffFile.hunks) {
-    const match = findLineInHunk(hunk, lineNumber);
-    if (match) {
-      return { hunk, ...match };
-    }
-  }
-  return undefined;
+): LineMatch | undefined {
+  return (
+    findLineWhere(
+      diffFile,
+      (line) => line.newLineNumber === lineNumber,
+      "RIGHT",
+    ) ??
+    findLineWhere(
+      diffFile,
+      (line) => line.type === "removed" && line.oldLineNumber === lineNumber,
+      "LEFT",
+    )
+  );
 }
 
 function mapSingleFinding(
