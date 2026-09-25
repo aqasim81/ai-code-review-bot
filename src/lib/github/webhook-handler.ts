@@ -34,9 +34,7 @@ const installationCreatedPayloadSchema = z.object({
   }),
   sender: z.object({ login: z.string() }),
   repositories: z
-    .array(
-      z.object({ id: z.number().int(), full_name: repositoryFullNameSchema }),
-    )
+    .array(z.object({ id: z.number().int(), full_name: z.string() }))
     .optional(),
 });
 
@@ -74,6 +72,28 @@ function parseWebhookPayloadShape<T>(
   return ok(parsed.data);
 }
 
+/**
+ * Drops (and logs) repositories whose name is not `owner/repo`, so one bad
+ * entry cannot fail the whole installation.
+ */
+function selectWellFormedRepositories(
+  repositories: readonly { id: number; full_name: string }[],
+  githubInstallationId: number,
+): { id: number; full_name: string }[] {
+  return repositories.filter((repo) => {
+    const wellFormed = repositoryFullNameSchema.safeParse(
+      repo.full_name,
+    ).success;
+    if (!wellFormed) {
+      logger.warn("Skipping repository with a malformed name", {
+        githubInstallationId,
+        githubRepoId: repo.id,
+      });
+    }
+    return wellFormed;
+  });
+}
+
 export async function handleInstallationCreated(
   payload: unknown,
 ): Promise<Result<{ installationId: string }, WebhookHandlerError>> {
@@ -99,7 +119,10 @@ export async function handleInstallationCreated(
     sender: sender.login,
   });
 
-  const repositories = parsed.data.repositories ?? [];
+  const repositories = selectWellFormedRepositories(
+    parsed.data.repositories ?? [],
+    installation.id,
+  );
   const result = await createInstallationWithRepositories(
     {
       githubInstallationId: installation.id,
