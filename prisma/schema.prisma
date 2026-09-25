@@ -87,6 +87,7 @@ model Review {
   issuesFound         Int             @default(0)
   processingTimeMs    Int?
   claimedByJobId      String?
+  claimToken          String?
   processingStartedAt DateTime?
   createdAt           DateTime        @default(now())
   completedAt         DateTime?

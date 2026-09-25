@@ -152,6 +152,22 @@ describe("processReviewJob", () => {
     expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
   });
 
+  it("marks job completed when another attempt holds the review (REVIEW_CLAIM_LOST)", async () => {
+    vi.mocked(executeReview).mockResolvedValue(err("REVIEW_CLAIM_LOST"));
+
+    await processReviewJob(createMockJob());
+
+    expect(updateJobRecord).toHaveBeenCalledWith("db-job-1", "COMPLETED");
+  });
+
+  it("throws before recording anything when the job has no ID", async () => {
+    await expect(
+      processReviewJob(createMockJob({ id: undefined })),
+    ).rejects.toThrow("no ID");
+    expect(createJobRecord).not.toHaveBeenCalled();
+    expect(executeReview).not.toHaveBeenCalled();
+  });
+
   it("throws error and marks job failed on review failure", async () => {
     vi.mocked(executeReview).mockResolvedValue(err("REVIEW_LLM_FAILED"));
 

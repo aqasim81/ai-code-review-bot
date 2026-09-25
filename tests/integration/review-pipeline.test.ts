@@ -21,6 +21,7 @@ import {
   failReview,
   findExistingReviewByCommitSha,
   findRepositoryByFullName,
+  isReviewClaimCurrent,
   markReviewCompleted,
   saveReviewFindings,
 } from "@/lib/db/queries";
@@ -28,6 +29,12 @@ import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
 import { err, ok } from "@/types/results";
+
+const NEW_REVIEW_CLAIM = { reviewId: reviewId(), claimToken: "new-token" };
+
+function retryClaimFor(id: string) {
+  return { reviewId: reviewId(id), claimToken: "retry-token" };
+}
 
 function setupSuccessfulDbMocks() {
   vi.mocked(parseRepositoryFullName).mockReturnValue({
@@ -38,11 +45,14 @@ function setupSuccessfulDbMocks() {
     ok({ id: repositoryId(), installationId: installationId() }),
   );
   vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
-  vi.mocked(createReviewRecord).mockResolvedValue(ok({ id: reviewId() }));
-  vi.mocked(saveReviewFindings).mockResolvedValue(ok(undefined));
-  vi.mocked(markReviewCompleted).mockResolvedValue(ok(undefined));
-  vi.mocked(claimExistingReview).mockResolvedValue(ok(true));
-  vi.mocked(failReview).mockResolvedValue(ok(undefined));
+  vi.mocked(createReviewRecord).mockResolvedValue(ok(NEW_REVIEW_CLAIM));
+  vi.mocked(saveReviewFindings).mockResolvedValue(ok(true));
+  vi.mocked(isReviewClaimCurrent).mockResolvedValue(ok(true));
+  vi.mocked(markReviewCompleted).mockResolvedValue(ok(true));
+  vi.mocked(claimExistingReview).mockImplementation(async (id) =>
+    ok({ reviewId: id, claimToken: "retry-token" }),
+  );
+  vi.mocked(failReview).mockResolvedValue(ok(true));
   vi.mocked(initializeAstParser).mockResolvedValue(ok(undefined));
   vi.mocked(parseFileAst).mockResolvedValue(
     ok({
@@ -94,7 +104,7 @@ describe("executeReview — review pipeline", () => {
       expect.objectContaining({ reviewId: reviewId() }),
     );
     expect(markReviewCompleted).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       expect.any(Number),
     );
   });
@@ -148,7 +158,7 @@ describe("executeReview — review pipeline", () => {
       );
       expect(createReviewRecord).not.toHaveBeenCalled();
       expect(markReviewCompleted).toHaveBeenCalledWith(
-        reviewId("stuck-review"),
+        retryClaimFor("stuck-review"),
         expect.any(Number),
       );
     },
@@ -158,7 +168,7 @@ describe("executeReview — review pipeline", () => {
     vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
       ok({ id: reviewId("busy-review"), status: "PROCESSING" }),
     );
-    vi.mocked(claimExistingReview).mockResolvedValue(ok(false));
+    vi.mocked(claimExistingReview).mockResolvedValue(ok(null));
     const github = createMockGitHubService();
 
     const result = await executeReview(
@@ -236,7 +246,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DIFF_FETCH_FAILED");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       expect.stringContaining("diff"),
     );
   });
@@ -352,6 +362,7 @@ describe("executeReview — review pipeline", () => {
     expect(saveReviewFindings).toHaveBeenCalledWith(
       expect.objectContaining({
         reviewId: reviewId(),
+        claimToken: "new-token",
         issuesFound: 1,
         comments: [
           expect.objectContaining({
@@ -385,7 +396,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Failed to save review results",
     );
     expect(github.postPullRequestReview).not.toHaveBeenCalled();
@@ -432,9 +443,72 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Failed to mark review completed",
     );
+  });
+
+  it("stops without posting or failing the review when saving finds the claim lost", async () => {
+    vi.mocked(saveReviewFindings).mockResolvedValue(ok(false));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_CLAIM_LOST");
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).not.toHaveBeenCalled();
+  });
+
+  it("checks the claim right before posting and does not post when it was lost", async () => {
+    vi.mocked(isReviewClaimCurrent).mockResolvedValue(ok(false));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_CLAIM_LOST");
+    expect(isReviewClaimCurrent).toHaveBeenCalledWith(NEW_REVIEW_CLAIM);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(failReview).not.toHaveBeenCalled();
+  });
+
+  it("returns REVIEW_CLAIM_LOST when completing finds the claim lost", async () => {
+    vi.mocked(markReviewCompleted).mockResolvedValue(ok(false));
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_CLAIM_LOST");
+    expect(failReview).not.toHaveBeenCalled();
   });
 
   it("re-runs a FAILED review for the same commit instead of skipping it", async () => {
@@ -467,7 +541,7 @@ describe("executeReview — review pipeline", () => {
     expect(createReviewRecord).not.toHaveBeenCalled();
     expect(github.postPullRequestReview).toHaveBeenCalled();
     expect(markReviewCompleted).toHaveBeenCalledWith(
-      reviewId("failed-review"),
+      retryClaimFor("failed-review"),
       expect.any(Number),
     );
   });
@@ -476,7 +550,7 @@ describe("executeReview — review pipeline", () => {
     vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
       ok({ id: reviewId("failed-review"), status: "FAILED" }),
     );
-    vi.mocked(claimExistingReview).mockResolvedValue(ok(false));
+    vi.mocked(claimExistingReview).mockResolvedValue(ok(null));
     const github = createMockGitHubService();
 
     const result = await executeReview(
@@ -528,7 +602,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_DB_ERROR");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Failed to save review results",
     );
   });
@@ -570,7 +644,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_POST_FAILED");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Failed to post review to GitHub",
     );
     expect(markReviewCompleted).not.toHaveBeenCalled();
@@ -591,7 +665,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_UNEXPECTED_ERROR");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Unexpected error during review",
     );
   });
@@ -612,7 +686,7 @@ describe("executeReview — review pipeline", () => {
     if (result.success) return;
     expect(result.error).toBe("REVIEW_UNEXPECTED_ERROR");
     expect(failReview).toHaveBeenCalledWith(
-      reviewId(),
+      NEW_REVIEW_CLAIM,
       "Unexpected error during review",
     );
     expect(markReviewCompleted).not.toHaveBeenCalled();
