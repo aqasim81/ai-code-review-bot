@@ -7,6 +7,7 @@ const octokitMocks = vi.hoisted(() => ({
   paginate: vi.fn(),
   listReviews: vi.fn(),
   getContent: vi.fn(),
+  getPullRequest: vi.fn(),
 }));
 
 vi.mock("@octokit/rest", () => ({
@@ -16,7 +17,10 @@ vi.mock("@octokit/rest", () => ({
       createInstallationAccessToken: octokitMocks.createInstallationAccessToken,
     };
     rateLimit = { get: octokitMocks.rateLimitGet };
-    pulls = { listReviews: octokitMocks.listReviews };
+    pulls = {
+      listReviews: octokitMocks.listReviews,
+      get: octokitMocks.getPullRequest,
+    };
     repos = { getContent: octokitMocks.getContent };
     paginate = octokitMocks.paginate;
   },
@@ -161,5 +165,76 @@ describe("fetchFileContent", () => {
       success: false,
       error: "GITHUB_CONTENT_TOO_LARGE",
     });
+  });
+});
+
+function httpError(
+  status: number,
+  message: string,
+  headers: Record<string, string> = {},
+): Error {
+  return Object.assign(new Error(message), { status, response: { headers } });
+}
+
+describe("fetchPullRequestDiff error classification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    octokitMocks.createInstallationAccessToken.mockResolvedValue({
+      data: { token: "installation-token" },
+    });
+    octokitMocks.rateLimitGet.mockResolvedValue({
+      data: { resources: { core: { remaining: 5000, reset: 0 } } },
+    });
+  });
+
+  it.each([
+    [
+      "a 403 with no requests remaining",
+      httpError(403, "API rate limit exceeded", {
+        "x-ratelimit-remaining": "0",
+      }),
+      "GITHUB_RATE_LIMITED",
+    ],
+    [
+      "a 403 with retry-after",
+      httpError(403, "Forbidden", { "retry-after": "60" }),
+      "GITHUB_RATE_LIMITED",
+    ],
+    [
+      "a 403 secondary rate limit",
+      httpError(403, "You have exceeded a secondary rate limit"),
+      "GITHUB_RATE_LIMITED",
+    ],
+    ["a 429", httpError(429, "Too many requests"), "GITHUB_RATE_LIMITED"],
+    [
+      "a 403 permission error",
+      httpError(403, "Resource not accessible by integration", {
+        "x-ratelimit-remaining": "4999",
+      }),
+      "GITHUB_FORBIDDEN",
+    ],
+    ["a 404", httpError(404, "Not Found"), "GITHUB_NOT_FOUND"],
+    [
+      "a 406 diff too large",
+      httpError(406, "Sorry, the diff exceeded the maximum number of lines"),
+      "GITHUB_REQUEST_REJECTED",
+    ],
+    [
+      "a 422",
+      httpError(422, "Unprocessable Entity"),
+      "GITHUB_REQUEST_REJECTED",
+    ],
+    ["a 502", httpError(502, "Bad Gateway"), "GITHUB_UNKNOWN_ERROR"],
+  ])("classifies %s", async (_label, error, expected) => {
+    octokitMocks.getPullRequest.mockRejectedValue(error);
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).fetchPullRequestDiff(
+      "owner",
+      "repo",
+      42,
+    );
+
+    expect(result).toEqual({ success: false, error: expected });
   });
 });

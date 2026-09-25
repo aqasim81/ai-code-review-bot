@@ -21,9 +21,9 @@ import { buildReviewContext } from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
 import { STALE_PROCESSING_REVIEW_MS } from "@/lib/review/stale-reviews";
 import type { RepositoryId, ReviewId } from "@/types/branded";
-import type { ReviewEngineError } from "@/types/errors";
+import type { GitHubError, ReviewEngineError } from "@/types/errors";
 import type { GitHubService, PullRequestReviewPayload } from "@/types/github";
-import type { LLMService } from "@/types/llm";
+import type { LLMError, LLMService } from "@/types/llm";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
 import type {
@@ -218,6 +218,33 @@ function logClaimLost(claim: ReviewClaimRef, step: string): void {
   });
 }
 
+/**
+ * Keeps why a GitHub call failed, so the queue can tell a failure no retry can
+ * fix (`rejectedCode`) and a rate limit from one worth retrying soon.
+ */
+function reviewErrorForGitHubFailure(
+  error: GitHubError,
+  rejectedCode: ReviewEngineError,
+  retryableCode: ReviewEngineError,
+): ReviewEngineError {
+  if (error === "GITHUB_RATE_LIMITED") return "REVIEW_GITHUB_RATE_LIMITED";
+  if (
+    error === "GITHUB_NOT_FOUND" ||
+    error === "GITHUB_FORBIDDEN" ||
+    error === "GITHUB_REQUEST_REJECTED"
+  ) {
+    return rejectedCode;
+  }
+  return retryableCode;
+}
+
+const REJECTED_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
+  "LLM_API_KEY_MISSING",
+  "LLM_AUTH_FAILED",
+  "LLM_BAD_REQUEST",
+  "LLM_CONTEXT_TOO_LONG",
+]);
+
 async function fetchAndParseDiff(
   githubService: GitHubService,
   owner: string,
@@ -233,7 +260,13 @@ async function fetchAndParseDiff(
   if (!diffResult.success) {
     logger.error("Failed to fetch diff", { error: diffResult.error });
     await markReviewFailed(claim, "Failed to fetch PR diff");
-    return err("REVIEW_DIFF_FETCH_FAILED");
+    return err(
+      reviewErrorForGitHubFailure(
+        diffResult.error,
+        "REVIEW_DIFF_UNAVAILABLE",
+        "REVIEW_DIFF_FETCH_FAILED",
+      ),
+    );
   }
 
   const parsedDiffResult = parseUnifiedDiff(diffResult.data);
@@ -400,7 +433,9 @@ function describeFindingCount(findingCount: number): string {
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
-): Promise<Result<LlmAnalysisResult, "REVIEW_LLM_FAILED">> {
+): Promise<
+  Result<LlmAnalysisResult, "REVIEW_LLM_FAILED" | "REVIEW_LLM_REJECTED">
+> {
   const allFindings: ReviewFinding[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -412,7 +447,11 @@ async function analyzeAllChunks(
         error: result.error,
         fileCount: chunk.files.length,
       });
-      return err("REVIEW_LLM_FAILED");
+      return err(
+        REJECTED_LLM_ERRORS.has(result.error)
+          ? "REVIEW_LLM_REJECTED"
+          : "REVIEW_LLM_FAILED",
+      );
     }
 
     allFindings.push(...result.data.findings);
@@ -514,7 +553,13 @@ async function wasPostedByEarlierAttempt(
       claim,
       "Failed to check for an existing review on GitHub",
     );
-    return err("REVIEW_POST_FAILED");
+    return err(
+      reviewErrorForGitHubFailure(
+        lookupResult.error,
+        "REVIEW_POST_REJECTED",
+        "REVIEW_POST_FAILED",
+      ),
+    );
   }
   if (lookupResult.data) {
     logger.info("Review already posted by an earlier attempt, not reposting", {
@@ -551,7 +596,13 @@ async function postReviewToGitHub(
       error: postResult.error,
     });
     await markReviewFailed(claim, "Failed to post review to GitHub");
-    return err("REVIEW_POST_FAILED");
+    return err(
+      reviewErrorForGitHubFailure(
+        postResult.error,
+        "REVIEW_POST_REJECTED",
+        "REVIEW_POST_FAILED",
+      ),
+    );
   }
 
   logger.info("Review posted to GitHub", {
@@ -717,7 +768,7 @@ async function analyzeSaveAndPostReview(
   const llmResult = await analyzeAllChunks(llmService, chunks);
   if (!llmResult.success) {
     await markReviewFailed(claim, "LLM analysis failed");
-    return err("REVIEW_LLM_FAILED");
+    return llmResult;
   }
   const { findings } = llmResult.data;
   const summary =

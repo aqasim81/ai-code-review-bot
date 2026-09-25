@@ -326,6 +326,101 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalled();
   });
 
+  it.each([
+    ["GITHUB_NOT_FOUND", "REVIEW_DIFF_UNAVAILABLE"],
+    ["GITHUB_FORBIDDEN", "REVIEW_DIFF_UNAVAILABLE"],
+    ["GITHUB_REQUEST_REJECTED", "REVIEW_DIFF_UNAVAILABLE"],
+    ["GITHUB_RATE_LIMITED", "REVIEW_GITHUB_RATE_LIMITED"],
+    ["GITHUB_AUTH_FAILED", "REVIEW_DIFF_FETCH_FAILED"],
+  ])(
+    "reports a diff fetch that failed with %s as %s",
+    async (githubError, expected) => {
+      const github = createMockGitHubService({
+        fetchPullRequestDiff: vi.fn().mockResolvedValue(err(githubError)),
+      });
+
+      const result = await executeReview(
+        createReviewRequest(),
+        github,
+        createMockLlmService(),
+      );
+
+      expect(result).toEqual({ success: false, error: expected });
+      expect(failReview).toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["LLM_API_KEY_MISSING", "REVIEW_LLM_REJECTED"],
+    ["LLM_AUTH_FAILED", "REVIEW_LLM_REJECTED"],
+    ["LLM_BAD_REQUEST", "REVIEW_LLM_REJECTED"],
+    ["LLM_CONTEXT_TOO_LONG", "REVIEW_LLM_REJECTED"],
+    ["LLM_TIMEOUT", "REVIEW_LLM_FAILED"],
+    ["LLM_INVALID_RESPONSE", "REVIEW_LLM_FAILED"],
+  ])(
+    "reports an analysis that failed with %s as %s",
+    async (llmError, expected) => {
+      const github = createMockGitHubService({
+        fetchPullRequestDiff: vi
+          .fn()
+          .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      });
+      const llm = createMockLlmService({
+        analyzeReviewChunk: vi.fn().mockResolvedValue(err(llmError)),
+      });
+
+      const result = await executeReview(createReviewRequest(), github, llm);
+
+      expect(result).toEqual({ success: false, error: expected });
+    },
+  );
+
+  it.each([
+    ["GITHUB_REQUEST_REJECTED", "REVIEW_POST_REJECTED"],
+    ["GITHUB_NOT_FOUND", "REVIEW_POST_REJECTED"],
+    ["GITHUB_RATE_LIMITED", "REVIEW_GITHUB_RATE_LIMITED"],
+    ["GITHUB_UNKNOWN_ERROR", "REVIEW_POST_FAILED"],
+  ])(
+    "reports a post that failed with %s as %s",
+    async (githubError, expected) => {
+      const github = createMockGitHubService({
+        fetchPullRequestDiff: vi
+          .fn()
+          .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+        postPullRequestReview: vi.fn().mockResolvedValue(err(githubError)),
+      });
+
+      const result = await executeReview(
+        createReviewRequest(),
+        github,
+        createMockLlmService(),
+      );
+
+      expect(result).toEqual({ success: false, error: expected });
+    },
+  );
+
+  it("reports a rate-limited existing-review lookup as REVIEW_GITHUB_RATE_LIMITED", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      findPostedReview: vi.fn().mockResolvedValue(err("GITHUB_RATE_LIMITED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_GITHUB_RATE_LIMITED",
+    });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+  });
+
   it("completes with zero issues when diff has no reviewable files", async () => {
     const emptyDiff =
       "diff --git a/image.png b/image.png\nBinary files differ\n";
@@ -842,7 +937,9 @@ describe("executeReview — review pipeline", () => {
   it("keeps the original error when marking the review failed also fails", async () => {
     vi.mocked(failReview).mockResolvedValue(err("DB down"));
     const github = createMockGitHubService({
-      fetchPullRequestDiff: vi.fn().mockResolvedValue(err("GITHUB_NOT_FOUND")),
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(err("GITHUB_UNKNOWN_ERROR")),
     });
 
     const result = await executeReview(

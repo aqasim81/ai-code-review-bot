@@ -1,7 +1,11 @@
 import { Queue, Worker } from "bullmq";
 import { logger } from "@/lib/logger";
 import { createValkeyConnectionOptions } from "@/lib/queue/connection";
-import { calculateBackoffDelay, processReviewJob } from "@/lib/queue/processor";
+import {
+  calculateBackoffDelay,
+  isFinalJobFailure,
+  processReviewJob,
+} from "@/lib/queue/processor";
 import type { ReviewJobData } from "@/lib/queue/types";
 import { DEAD_LETTER_QUEUE_NAME, REVIEW_QUEUE_NAME } from "@/lib/queue/types";
 import { expireStaleReviews } from "@/lib/review/stale-reviews";
@@ -54,7 +58,7 @@ async function moveToDeadLetterQueue(
       failedAt: new Date().toISOString(),
     });
 
-    logger.error("Job moved to dead letter queue after exhausting retries", {
+    logger.error("Job moved to dead letter queue", {
       jobId,
       repository: jobData.payload.repositoryFullName,
       pullRequest: jobData.payload.pullRequestNumber,
@@ -99,11 +103,8 @@ async function handleJobFailed(
     return;
   }
 
-  const maxAttempts = job.opts.attempts ?? 3;
-  const isFinalAttempt = job.attemptsMade >= maxAttempts;
-
-  if (isFinalAttempt) {
-    logger.error("Job permanently failed after exhausting retries", {
+  if (isFinalJobFailure(job, error)) {
+    logger.error("Job permanently failed", {
       jobId: job.id,
       name: job.name,
       repository: job.data.payload.repositoryFullName,
@@ -123,7 +124,7 @@ async function handleJobFailed(
       repository: job.data.payload.repositoryFullName,
       error: error.message,
       attemptsMade: job.attemptsMade,
-      maxAttempts,
+      maxAttempts: job.opts.attempts,
     });
   }
 }
@@ -146,9 +147,11 @@ function createReviewWorker(): {
       lockDuration: LOCK_DURATION_MS,
       stalledInterval: STALE_INTERVAL_MS,
       settings: {
-        backoffStrategy: (attemptsMade: number) => {
-          return calculateBackoffDelay(attemptsMade);
-        },
+        backoffStrategy: (
+          attemptsMade: number,
+          _type?: string,
+          error?: Error,
+        ) => calculateBackoffDelay(attemptsMade, error),
       },
     },
   );
