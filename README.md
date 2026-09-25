@@ -111,7 +111,7 @@ See `.env.example` for all required variables. Key ones:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `VALKEY_URL` | Valkey/Redis connection string |
 | `ANTHROPIC_API_KEY` | API key for LLM analysis |
-| `LLM_MODEL_ID` | Optional. Model used for reviews (default `claude-sonnet-5`). Change it when a model is retired |
+| `LLM_MODEL_ID` | Optional. Model used for reviews (default set in `src/lib/env.ts`). Change it when a model is retired |
 | `NEXTAUTH_SECRET` | Secret for session encryption |
 | `NEXTAUTH_URL` | Public URL of the dashboard (e.g. `http://localhost:3000`) |
 | `GITHUB_APP_SLUG` | Optional. Your GitHub App's URL slug, used for the install link (default `code-review-bot`) |
