@@ -253,6 +253,9 @@ function reviewErrorForGitHubFailure(
   step: keyof typeof GITHUB_STEP_ERRORS,
 ): Exclude<ReviewEngineError, "REVIEW_CLAIM_LOST"> {
   if (error === "GITHUB_RATE_LIMITED") return "REVIEW_GITHUB_RATE_LIMITED";
+  if (error === "GITHUB_INSTALLATION_UNAVAILABLE") {
+    return "REVIEW_REPOSITORY_UNAVAILABLE";
+  }
   if (
     error === "GITHUB_NOT_FOUND" ||
     error === "GITHUB_FORBIDDEN" ||

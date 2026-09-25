@@ -12,6 +12,7 @@ export type GitHubError =
   | "GITHUB_CONTENT_TOO_LARGE"
   | "GITHUB_FORBIDDEN"
   | "GITHUB_REQUEST_REJECTED"
+  | "GITHUB_INSTALLATION_UNAVAILABLE"
   | "GITHUB_UNKNOWN_ERROR";
 
 export type ReviewEngineError =
