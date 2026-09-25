@@ -4,8 +4,7 @@ import GitHub from "next-auth/providers/github";
 import { env } from "@/lib/env";
 import { refreshAccessState } from "@/lib/github/access-refresh";
 import { parseUserAccess } from "@/lib/github/repository-access";
-import { fetchUserRepositoryAccessCached } from "@/lib/github/user-access-cache";
-import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
+import { fetchUserRepositoryAccessShared } from "@/lib/github/user-access-cache";
 import { logger } from "@/lib/logger";
 
 function timestampOrZero(value: unknown): number {
@@ -13,13 +12,13 @@ function timestampOrZero(value: unknown): number {
 }
 
 /**
- * Keeps the token's repository access current. A forced refresh (sign-in, or
- * an explicit session update such as after installing the app) skips the
- * shared cache; otherwise access is re-fetched every few minutes.
+ * Keeps the token's repository access current: re-fetched every few minutes,
+ * or right away when forced (sign-in, or an explicit session update such as
+ * after installing the app).
  */
 async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
   const now = Date.now();
-  const state = await refreshAccessState({
+  const { state, outcome } = await refreshAccessState({
     state: {
       access: parseUserAccess(token.access),
       fetchedAt: timestampOrZero(token.accessFetchedAt),
@@ -28,13 +27,13 @@ async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
     accessToken: token.accessToken,
     forced,
     now,
-    fetchAccess: forced
-      ? fetchUserRepositoryAccess
-      : (accessToken) => fetchUserRepositoryAccessCached(accessToken, now),
+    fetchAccess: (accessToken) =>
+      fetchUserRepositoryAccessShared(accessToken, { now, forced }),
   });
-  if (state.checkedAt === now && state.fetchedAt !== now) {
+  if (outcome.kind === "failed") {
     logger.warn("Failed to refresh user repository access", {
       login: token.login,
+      error: outcome.error,
     });
   }
   token.access = state.access;

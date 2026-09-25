@@ -1,30 +1,56 @@
+import type { FetchedAccess } from "@/lib/github/access-refresh";
 import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
-import type { UserAccess } from "@/types/access";
 import type { Result } from "@/types/results";
 
-// One dashboard request runs the session callback in middleware, the layout
-// and the page; only middleware can store the refreshed cookie. Sharing the
-// fetch for a short time keeps one refresh to one set of GitHub calls.
-const CACHE_TTL_MS = 30_000;
+// A regular refresh reuses a result for 30 s: one dashboard request runs the
+// session callback in middleware, the layout and the page. A forced refresh
+// can be requested by the client at will, so it reuses a result for 10 s;
+// this server-side limit holds even if the client replays an old cookie.
+const REGULAR_MAX_AGE_MS = 30_000;
+const FORCED_MAX_AGE_MS = 10_000;
 
 interface CacheEntry {
-  readonly expiresAt: number;
-  readonly result: Promise<Result<UserAccess, string>>;
+  readonly fetchedAt: number;
+  readonly result: Promise<Result<FetchedAccess, string>>;
 }
 
 const cache = new Map<string, CacheEntry>();
 
-export function fetchUserRepositoryAccessCached(
-  accessToken: string,
-  now: number,
-): Promise<Result<UserAccess, string>> {
-  for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
-  }
-  const hit = cache.get(accessToken);
-  if (hit) return hit.result;
+// Keys are hashes so live tokens are not kept in memory as map keys.
+async function hashToken(accessToken: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(accessToken),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
 
-  const result = fetchUserRepositoryAccess(accessToken);
-  cache.set(accessToken, { expiresAt: now + CACHE_TTL_MS, result });
+async function fetchAndStamp(
+  accessToken: string,
+  fetchedAt: number,
+): Promise<Result<FetchedAccess, string>> {
+  const result = await fetchUserRepositoryAccess(accessToken);
+  if (!result.success) return result;
+  return { success: true, data: { access: result.data, fetchedAt } };
+}
+
+export async function fetchUserRepositoryAccessShared(
+  accessToken: string,
+  options: { readonly now: number; readonly forced: boolean },
+): Promise<Result<FetchedAccess, string>> {
+  const { now, forced } = options;
+  for (const [key, entry] of cache) {
+    if (now - entry.fetchedAt >= REGULAR_MAX_AGE_MS) cache.delete(key);
+  }
+
+  const key = await hashToken(accessToken);
+  const maxAge = forced ? FORCED_MAX_AGE_MS : REGULAR_MAX_AGE_MS;
+  const hit = cache.get(key);
+  if (hit && now - hit.fetchedAt < maxAge) return hit.result;
+
+  const result = fetchAndStamp(accessToken, now);
+  cache.set(key, { fetchedAt: now, result });
   return result;
 }

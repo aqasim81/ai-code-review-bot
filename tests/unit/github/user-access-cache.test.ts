@@ -5,7 +5,7 @@ vi.mock("@/lib/github/user-installations", () => ({
 }));
 
 import { fetchUserRepositoryAccess } from "@/lib/github/user-installations";
-import { ok } from "@/types/results";
+import { err, ok } from "@/types/results";
 
 const ACCESS = {
   githubInstallationIds: [10],
@@ -19,39 +19,70 @@ async function loadFreshCache() {
   return import("@/lib/github/user-access-cache");
 }
 
-describe("fetchUserRepositoryAccessCached", () => {
+describe("fetchUserRepositoryAccessShared", () => {
   beforeEach(() => {
     vi.mocked(fetchUserRepositoryAccess).mockReset();
     vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(ok(ACCESS));
   });
 
-  it("shares one fetch between calls within 30 seconds", async () => {
-    const { fetchUserRepositoryAccessCached } = await loadFreshCache();
+  it("shares one fetch between regular refreshes within 30 seconds and keeps its fetch time", async () => {
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 
-    const first = fetchUserRepositoryAccessCached("token", 0);
-    const second = fetchUserRepositoryAccessCached("token", 29_000);
+    await fetchUserRepositoryAccessShared("token", { now: 0, forced: false });
+    const reused = await fetchUserRepositoryAccessShared("token", {
+      now: 29_000,
+      forced: false,
+    });
 
-    expect(await first).toEqual(ok(ACCESS));
-    expect(await second).toEqual(ok(ACCESS));
+    expect(reused).toEqual(ok({ access: ACCESS, fetchedAt: 0 }));
     expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(1);
   });
 
-  it("fetches again once the entry expires", async () => {
-    const { fetchUserRepositoryAccessCached } = await loadFreshCache();
+  it("fetches again once a regular entry is 30 seconds old", async () => {
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 
-    await fetchUserRepositoryAccessCached("token", 0);
-    await fetchUserRepositoryAccessCached("token", 30_000);
+    await fetchUserRepositoryAccessShared("token", { now: 0, forced: false });
+    await fetchUserRepositoryAccessShared("token", {
+      now: 30_000,
+      forced: false,
+    });
+
+    expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it("limits forced refreshes to one GitHub fetch per 10 seconds, however often the client asks", async () => {
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    for (const now of [0, 2_000, 5_000, 9_999]) {
+      await fetchUserRepositoryAccessShared("token", { now, forced: true });
+    }
+    await fetchUserRepositoryAccessShared("token", {
+      now: 10_000,
+      forced: true,
+    });
 
     expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(2);
   });
 
   it("keeps different users' tokens apart", async () => {
-    const { fetchUserRepositoryAccessCached } = await loadFreshCache();
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 
-    await fetchUserRepositoryAccessCached("token-a", 0);
-    await fetchUserRepositoryAccessCached("token-b", 0);
+    await fetchUserRepositoryAccessShared("token-a", { now: 0, forced: false });
+    await fetchUserRepositoryAccessShared("token-b", { now: 0, forced: false });
 
     expect(fetchUserRepositoryAccess).toHaveBeenCalledWith("token-a");
     expect(fetchUserRepositoryAccess).toHaveBeenCalledWith("token-b");
+  });
+
+  it("passes a failed fetch through", async () => {
+    vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(err("revoked"));
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    const result = await fetchUserRepositoryAccessShared("token", {
+      now: 0,
+      forced: true,
+    });
+
+    expect(result).toEqual(err("revoked"));
   });
 });

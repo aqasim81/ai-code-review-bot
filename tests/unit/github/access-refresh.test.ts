@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ACCESS_REFRESH_INTERVAL_MS,
   type AccessState,
+  type FetchedAccess,
   refreshAccessState,
 } from "@/lib/github/access-refresh";
 import { EMPTY_USER_ACCESS } from "@/lib/github/repository-access";
@@ -24,10 +25,18 @@ const NARROWER_ACCESS: UserAccess = {
 };
 const FETCHED_AT = 1_000_000_000_000;
 
-type FetchAccess = (accessToken: string) => Promise<Result<UserAccess, string>>;
+type FetchAccess = (
+  accessToken: string,
+) => Promise<Result<FetchedAccess, string>>;
 
 function stateFetchedAt(fetchedAt: number, checkedAt = fetchedAt): AccessState {
   return { access: OLD_ACCESS, fetchedAt, checkedAt };
+}
+
+function fetchSucceedingAt(fetchedAt: number) {
+  return vi
+    .fn<FetchAccess>()
+    .mockResolvedValue(ok({ access: NARROWER_ACCESS, fetchedAt }));
 }
 
 function refreshAt(
@@ -36,12 +45,10 @@ function refreshAt(
     state?: AccessState;
     forced?: boolean;
     accessToken?: string | undefined;
-    fetchAccess?: FetchAccess;
+    fetchAccess?: ReturnType<typeof vi.fn<FetchAccess>>;
   } = {},
 ) {
-  const fetchAccess =
-    options.fetchAccess ??
-    vi.fn<FetchAccess>().mockResolvedValue(ok(NARROWER_ACCESS));
+  const fetchAccess = options.fetchAccess ?? fetchSucceedingAt(now);
   const promise = refreshAccessState({
     state: options.state ?? stateFetchedAt(FETCHED_AT),
     accessToken: "accessToken" in options ? options.accessToken : "token",
@@ -56,7 +63,10 @@ describe("refreshAccessState", () => {
   it("does not fetch while the access is fresh", async () => {
     const { promise, fetchAccess } = refreshAt(FETCHED_AT + 4 * MINUTE);
 
-    expect((await promise).access).toEqual(OLD_ACCESS);
+    expect(await promise).toEqual({
+      state: stateFetchedAt(FETCHED_AT),
+      outcome: { kind: "unchanged" },
+    });
     expect(fetchAccess).not.toHaveBeenCalled();
   });
 
@@ -65,22 +75,29 @@ describe("refreshAccessState", () => {
     const { promise } = refreshAt(now);
 
     expect(await promise).toEqual({
-      access: NARROWER_ACCESS,
-      fetchedAt: now,
-      checkedAt: now,
+      state: { access: NARROWER_ACCESS, fetchedAt: now, checkedAt: now },
+      outcome: { kind: "refreshed" },
     });
   });
 
-  it("keeps the old access after one failed refresh and records the attempt", async () => {
+  it("records when a shared result was actually fetched, not when it was reused", async () => {
+    const now = FETCHED_AT + 6 * MINUTE;
+    const { promise } = refreshAt(now, {
+      fetchAccess: fetchSucceedingAt(now - 20_000),
+    });
+
+    expect((await promise).state.fetchedAt).toBe(now - 20_000);
+  });
+
+  it("keeps the old access after one failed refresh and reports the error", async () => {
     const now = FETCHED_AT + 6 * MINUTE;
     const { promise } = refreshAt(now, {
       fetchAccess: vi.fn<FetchAccess>().mockResolvedValue(err("boom")),
     });
 
     expect(await promise).toEqual({
-      access: OLD_ACCESS,
-      fetchedAt: FETCHED_AT,
-      checkedAt: now,
+      state: { access: OLD_ACCESS, fetchedAt: FETCHED_AT, checkedAt: now },
+      outcome: { kind: "failed", error: "boom" },
     });
   });
 
@@ -97,7 +114,7 @@ describe("refreshAccessState", () => {
       fetchAccess: vi.fn<FetchAccess>().mockResolvedValue(err("boom")),
     });
 
-    expect((await promise).access).toEqual(EMPTY_USER_ACCESS);
+    expect((await promise).state.access).toEqual(EMPTY_USER_ACCESS);
   });
 
   it("drops stale access even when a retry is not yet allowed", async () => {
@@ -105,7 +122,7 @@ describe("refreshAccessState", () => {
       state: stateFetchedAt(FETCHED_AT, FETCHED_AT + 9.5 * MINUTE),
     });
 
-    expect((await promise).access).toEqual(EMPTY_USER_ACCESS);
+    expect((await promise).state.access).toEqual(EMPTY_USER_ACCESS);
     expect(fetchAccess).not.toHaveBeenCalled();
   });
 
@@ -114,14 +131,8 @@ describe("refreshAccessState", () => {
       forced: true,
     });
 
-    expect((await promise).access).toEqual(NARROWER_ACCESS);
+    expect((await promise).state.access).toEqual(NARROWER_ACCESS);
     expect(fetchAccess).toHaveBeenCalledOnce();
-  });
-
-  it("limits forced refreshes to one every ten seconds", async () => {
-    const { fetchAccess } = refreshAt(FETCHED_AT + 5_000, { forced: true });
-
-    expect(fetchAccess).not.toHaveBeenCalled();
   });
 
   it("refreshes a token from before this change right away", async () => {
@@ -133,15 +144,17 @@ describe("refreshAccessState", () => {
   });
 
   it("cannot refresh without a user token and lets the access expire", async () => {
-    const now = FETCHED_AT + 10 * MINUTE;
-    const { promise, fetchAccess } = refreshAt(now, {
+    const { promise, fetchAccess } = refreshAt(FETCHED_AT + 10 * MINUTE, {
       accessToken: undefined,
     });
 
     expect(await promise).toEqual({
-      access: EMPTY_USER_ACCESS,
-      fetchedAt: FETCHED_AT,
-      checkedAt: now,
+      state: {
+        access: EMPTY_USER_ACCESS,
+        fetchedAt: FETCHED_AT,
+        checkedAt: FETCHED_AT,
+      },
+      outcome: { kind: "unchanged" },
     });
     expect(fetchAccess).not.toHaveBeenCalled();
   });
