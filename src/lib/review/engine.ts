@@ -31,6 +31,7 @@ import {
   filterFindingsBySettings,
 } from "@/lib/review/settings-filter";
 import {
+  REVIEW_CLAIM_MAX_RENEWAL_MS,
   REVIEW_CLAIM_RENEWAL_INTERVAL_MS,
   STALE_PROCESSING_REVIEW_MS,
 } from "@/lib/review/stale-reviews";
@@ -942,12 +943,22 @@ async function analyzeSaveAndPostReview(
 
 /**
  * Renews the claim while the review runs, so a slow review (a large pull
- * request or a slow model) is never taken for an abandoned one and expired.
+ * request or a slow model) is never taken for an abandoned one and expired. A
+ * run past the renewal limit is taken as hung and stops renewing.
  */
-function keepReviewClaimAlive(claim: ReviewClaimRef): () => void {
+function keepReviewClaimAlive(
+  claim: ReviewClaimRef,
+  startTime: number,
+): () => void {
   return startHeartbeat(
     "review-claim",
     async () => {
+      if (Date.now() - startTime > REVIEW_CLAIM_MAX_RENEWAL_MS) {
+        logger.warn("Review is running past the renewal limit, not renewing", {
+          reviewId: claim.reviewId,
+        });
+        return;
+      }
       const renewResult = await renewReviewClaim(claim);
       if (!renewResult.success) {
         logger.warn("Failed to renew review claim", {
@@ -963,7 +974,10 @@ function keepReviewClaimAlive(claim: ReviewClaimRef): () => void {
 async function runReviewStepsWithFailureGuard(
   context: ReviewStepsContext,
 ): Promise<Result<ReviewEngineResult, ReviewEngineError>> {
-  const stopRenewingClaim = keepReviewClaimAlive(context.claim);
+  const stopRenewingClaim = keepReviewClaimAlive(
+    context.claim,
+    context.startTime,
+  );
   try {
     const result = await runReviewSteps(context);
     if (result.success) return result;

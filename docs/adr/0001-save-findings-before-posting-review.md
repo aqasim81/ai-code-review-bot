@@ -21,7 +21,7 @@ retryable with the old order would have allowed a retry to post the same comment
   (a single-row update).
 - `claimReviewRecord` handles an existing review for the same commit:
   - none → create a PROCESSING review, recording the queue job ID (`claimedByJobId`) and
-    `processingStartedAt` (renamed `claimRenewedAt` in #114). If another job creates it first, the insert hits the
+    `processingStartedAt` (the `claimRenewedAt` field since #114; the column name is kept). If another job creates it first, the insert hits the
     `(repositoryId, commitSha)` unique key; `createReviewRecord` maps Prisma's `P2002` to "already
     exists" and the job returns `REVIEW_ALREADY_EXISTS` instead of a database error (#24). The
     losing job does not re-check whether the winner's review has since become claimable; if the
@@ -77,7 +77,8 @@ retryable with the old order would have allowed a retry to post the same comment
   *(Changed for #114.)* The attempt holding the claim renews `claimRenewedAt` every 5 minutes
   while it runs (`renewReviewClaim`), so the cutoff measures time since the owner last showed it
   was alive, not time since the review started. A large pull request or a slow model can take
-  longer than 30 minutes without being expired; only an attempt that died or hung is.
+  longer than 30 minutes without being expired. Renewal stops after 3 hours, so an attempt that
+  hangs (a call that never returns) still has its review expired; one that died is expired as before.
   Each expiry is a guarded, per-review update, so a review reclaimed at the same moment is left
   alone and running the sweep in several workers is safe. *(Added for #30.)*
 - Known gap: if the owning job is dead but the review is not yet stale, a new job for the same
