@@ -69,6 +69,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
       // the findings completed before the cut rather than failing the review.
       if (truncated) {
         logger.warn("LLM output truncated at the output token limit", {
+          filePaths: chunk.files.map((file) => file.filePath),
           outputTokens,
           maxOutputTokens,
         });
