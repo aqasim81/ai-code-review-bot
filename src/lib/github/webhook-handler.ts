@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { AccountType } from "@/generated/prisma/enums";
 import {
+  addRepositoriesToInstallation,
   createInstallationWithRepositories,
   markInstallationDeleted,
+  removeRepositoriesFromInstallation,
+  setInstallationSuspended,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
 import { enqueueDeltaReviewJob, enqueueReviewJob } from "@/lib/queue/producer";
@@ -41,6 +44,20 @@ const installationCreatedPayloadSchema = z.object({
 
 const installationDeletedPayloadSchema = z.object({
   installation: z.object({ id: z.number().int() }),
+});
+
+const installationSuspensionPayloadSchema = installationDeletedPayloadSchema;
+
+const installationRepositoriesPayloadSchema = z.object({
+  action: z.enum(["added", "removed"]),
+  installation: z.object({
+    id: z.number().int(),
+    account: installationAccountSchema,
+  }),
+  repositories_added: z
+    .array(z.object({ id: z.number().int(), full_name: z.string() }))
+    .default([]),
+  repositories_removed: z.array(z.object({ id: z.number().int() })).default([]),
 });
 
 const pullRequestActionSchema = z.object({ action: z.string() });
@@ -112,6 +129,13 @@ function describeInstallationAccount(
     accountLogin: account.login,
     accountType: account.type === "Organization" ? "ORG" : "USER",
   };
+}
+
+function toInstallationAccountFields(
+  account: z.infer<typeof installationAccountSchema>,
+): { githubAccountLogin: string; githubAccountType: AccountType } {
+  const { accountLogin, accountType } = describeInstallationAccount(account);
+  return { githubAccountLogin: accountLogin, githubAccountType: accountType };
 }
 
 export async function handleInstallationCreated(
@@ -197,6 +221,89 @@ export async function handleInstallationDeleted(
     githubInstallationId: installation.id,
   });
 
+  return ok({ acknowledged: true });
+}
+
+/**
+ * Keeps an installation's repositories in step with GitHub when repositories
+ * are added to or removed from it after installation.
+ */
+export async function handleInstallationRepositoriesChanged(
+  payload: unknown,
+): Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>> {
+  const parsed = parseWebhookPayloadShape(
+    installationRepositoriesPayloadSchema,
+    payload,
+    "installation_repositories",
+  );
+  if (!parsed.success) return parsed;
+  const { action, installation } = parsed.data;
+
+  const result =
+    action === "added"
+      ? await addRepositoriesToInstallation(
+          {
+            githubInstallationId: installation.id,
+            ...toInstallationAccountFields(installation.account),
+          },
+          selectWellFormedRepositories(
+            parsed.data.repositories_added,
+            installation.id,
+          ).map((repo) => ({
+            githubRepoId: repo.id,
+            fullName: repo.full_name,
+          })),
+        )
+      : await removeRepositoriesFromInstallation(
+          installation.id,
+          parsed.data.repositories_removed.map((repo) => repo.id),
+        );
+
+  if (!result.success) {
+    logger.error("Failed to update installation repositories", {
+      githubInstallationId: installation.id,
+      action,
+      error: result.error,
+    });
+    return err("INSTALLATION_SAVE_FAILED");
+  }
+
+  logger.info("Installation repositories updated", {
+    githubInstallationId: installation.id,
+    action,
+    ...result.data,
+  });
+  return ok({ acknowledged: true });
+}
+
+export async function handleInstallationSuspension(
+  payload: unknown,
+  suspended: boolean,
+): Promise<Result<{ acknowledged: boolean }, WebhookHandlerError>> {
+  const parsed = parseWebhookPayloadShape(
+    installationSuspensionPayloadSchema,
+    payload,
+    suspended ? "installation.suspend" : "installation.unsuspend",
+  );
+  if (!parsed.success) return parsed;
+  const githubInstallationId = parsed.data.installation.id;
+
+  const result = await setInstallationSuspended(
+    githubInstallationId,
+    suspended,
+  );
+  if (!result.success) {
+    logger.error("Failed to update installation status", {
+      githubInstallationId,
+      suspended,
+      error: result.error,
+    });
+    return err("INSTALLATION_SAVE_FAILED");
+  }
+
+  logger.info(suspended ? "Installation suspended" : "Installation resumed", {
+    githubInstallationId,
+  });
   return ok({ acknowledged: true });
 }
 

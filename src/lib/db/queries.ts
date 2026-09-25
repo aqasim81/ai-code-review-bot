@@ -29,40 +29,112 @@ interface CreateRepositoryInput {
   fullName: string;
 }
 
+async function saveInstallationRepositories(
+  installation: CreateInstallationInput,
+  repositories: readonly CreateRepositoryInput[],
+  options: { readonly reactivate: boolean },
+): Promise<InstallationId> {
+  return prisma.$transaction(async (tx) => {
+    const saved = await tx.installation.upsert({
+      where: { githubInstallationId: installation.githubInstallationId },
+      update: {
+        githubAccountLogin: installation.githubAccountLogin,
+        githubAccountType: installation.githubAccountType,
+        ...(options.reactivate ? { status: "ACTIVE" as const } : {}),
+      },
+      create: { ...installation, status: "ACTIVE" },
+    });
+    for (const repo of repositories) {
+      await tx.repository.upsert({
+        where: {
+          installationId_githubRepoId: {
+            installationId: saved.id,
+            githubRepoId: repo.githubRepoId,
+          },
+        },
+        update: { fullName: repo.fullName },
+        create: { installationId: saved.id, ...repo },
+      });
+    }
+    return saved.id as InstallationId;
+  });
+}
+
 export async function createInstallationWithRepositories(
   installation: CreateInstallationInput,
   repositories: CreateRepositoryInput[],
 ): Promise<Result<{ id: InstallationId; repositoryCount: number }, string>> {
   try {
-    const id = await prisma.$transaction(async (tx) => {
-      const saved = await tx.installation.upsert({
-        where: { githubInstallationId: installation.githubInstallationId },
-        update: {
-          githubAccountLogin: installation.githubAccountLogin,
-          githubAccountType: installation.githubAccountType,
-          status: "ACTIVE",
-        },
-        create: { ...installation, status: "ACTIVE" },
-      });
-      for (const repo of repositories) {
-        await tx.repository.upsert({
-          where: {
-            installationId_githubRepoId: {
-              installationId: saved.id,
-              githubRepoId: repo.githubRepoId,
-            },
-          },
-          update: { fullName: repo.fullName },
-          create: { installationId: saved.id, ...repo },
-        });
-      }
-      return saved.id as InstallationId;
+    const id = await saveInstallationRepositories(installation, repositories, {
+      reactivate: true,
     });
     return ok({ id, repositoryCount: repositories.length });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown database error";
     return err(`Failed to save installation and repositories: ${message}`);
+  }
+}
+
+/**
+ * Records repositories added to an installation. The installation is created
+ * if it was never recorded, but its status is left alone: adding repositories
+ * does not revive a suspended or deleted installation.
+ */
+export async function addRepositoriesToInstallation(
+  installation: CreateInstallationInput,
+  repositories: readonly CreateRepositoryInput[],
+): Promise<Result<{ repositoryCount: number }, string>> {
+  try {
+    await saveInstallationRepositories(installation, repositories, {
+      reactivate: false,
+    });
+    return ok({ repositoryCount: repositories.length });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to add repositories: ${message}`);
+  }
+}
+
+/**
+ * Deletes repositories removed from an installation, with their reviews. A
+ * repository added back later starts fresh and enabled.
+ */
+export async function removeRepositoriesFromInstallation(
+  githubInstallationId: number,
+  githubRepoIds: readonly number[],
+): Promise<Result<{ removedCount: number }, string>> {
+  try {
+    const { count } = await prisma.repository.deleteMany({
+      where: {
+        githubRepoId: { in: [...githubRepoIds] },
+        installation: { githubInstallationId },
+      },
+    });
+    return ok({ removedCount: count });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to remove repositories: ${message}`);
+  }
+}
+
+/** Suspends or resumes an installation; a deleted installation stays deleted. */
+export async function setInstallationSuspended(
+  githubInstallationId: number,
+  suspended: boolean,
+): Promise<Result<void, string>> {
+  try {
+    await prisma.installation.updateMany({
+      where: { githubInstallationId, status: { not: "DELETED" } },
+      data: { status: suspended ? "SUSPENDED" : "ACTIVE" },
+    });
+    return ok(undefined);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown database error";
+    return err(`Failed to update installation status: ${message}`);
   }
 }
 
