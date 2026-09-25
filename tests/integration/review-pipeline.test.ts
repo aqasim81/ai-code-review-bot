@@ -355,6 +355,74 @@ describe("executeReview — review pipeline", () => {
     expect(result.error).toBe("REVIEW_DIFF_FETCH_FAILED");
   });
 
+  it("marks the review FAILED, not COMPLETED, when posting to GitHub fails", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+      postPullRequestReview: vi
+        .fn()
+        .mockResolvedValue(err("GITHUB_UNKNOWN_ERROR")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_POST_FAILED");
+    expect(failReview).toHaveBeenCalledWith(
+      reviewId(),
+      "Failed to post review to GitHub",
+    );
+    expect(completeReviewWithComments).not.toHaveBeenCalled();
+  });
+
+  it("marks the review FAILED when fetching the diff throws", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockRejectedValue(new Error("boom")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_UNEXPECTED_ERROR");
+    expect(failReview).toHaveBeenCalledWith(
+      reviewId(),
+      "Unexpected error during review",
+    );
+  });
+
+  it("marks the review FAILED when LLM analysis throws", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockRejectedValue(new Error("boom")),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("REVIEW_UNEXPECTED_ERROR");
+    expect(failReview).toHaveBeenCalledWith(
+      reviewId(),
+      "Unexpected error during review",
+    );
+    expect(completeReviewWithComments).not.toHaveBeenCalled();
+  });
+
   it("filters files by filePathFilter for delta reviews", async () => {
     const multiFileDiff = [
       "diff --git a/src/a.ts b/src/a.ts",
