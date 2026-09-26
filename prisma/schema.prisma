@@ -83,29 +83,30 @@ model Repository {
 }
 
 model Review {
-  id                  String          @id @default(uuid())
+  id                  String                @id @default(uuid())
   repositoryId        String
-  repository          Repository      @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  repository          Repository            @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   pullRequestNumber   Int
   commitSha           String
-  status              ReviewStatus    @default(PROCESSING)
+  status              ReviewStatus          @default(PROCESSING)
   summary             String?
-  issuesFound         Int             @default(0)
+  issuesFound         Int                   @default(0)
   processingTimeMs    Int?
   claimedByJobId      String?
   claimToken          String?
   /// Set when the review is claimed and renewed while the owning attempt runs.
-  claimRenewedAt      DateTime? @map("processingStartedAt")
+  claimRenewedAt      DateTime?             @map("processingStartedAt")
   /// When GitHub reported the commit as the pull request's head (the time the
   /// review's job was queued). Orders reviews by push, not by when they finished.
   headSeenAt          DateTime?
   /// Files of the pull request counted as reviewed at this commit.
-  coveredFilePaths    String[]        @default([])
+  coveredFilePaths    String[]              @default([])
   /// The settings that shaped the findings; a change means a full review.
   settingsFingerprint String?
-  createdAt           DateTime        @default(now())
+  createdAt           DateTime              @default(now())
   completedAt         DateTime?
   comments            ReviewComment[]
+  chunkAnalyses       ReviewChunkAnalysis[]
 
   @@unique([repositoryId, pullRequestNumber, commitSha])
   @@index([repositoryId, pullRequestNumber, status, createdAt])
@@ -129,19 +130,37 @@ model ReviewComment {
   @@map("review_comments")
 }
 
+/// A chunk's analysis by the model, kept until the review is completed so a
+/// retry of the job reuses it rather than paying for it again (#143).
+model ReviewChunkAnalysis {
+  id           String   @id @default(uuid())
+  reviewId     String
+  review       Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  /// Hash of everything that shaped the request: the chunk, the prompt options and the model.
+  chunkKey     String
+  findings     Json
+  truncated    Boolean
+  inputTokens  Int
+  outputTokens Int
+  createdAt    DateTime @default(now())
+
+  @@unique([reviewId, chunkKey])
+  @@map("review_chunk_analyses")
+}
+
 model Job {
-  id          String    @id @default(uuid())
-  type        String
-  payload     Json
-  status      JobStatus @default(QUEUED)
-  attempts    Int       @default(0)
-  lastError   String?
+  id           String    @id @default(uuid())
+  type         String
+  payload      Json
+  status       JobStatus @default(QUEUED)
+  attempts     Int       @default(0)
+  lastError    String?
   /// Set by each run that claims the record; status writes need the current token.
-  runToken    String?
+  runToken     String?
   /// Set on claim and renewed while the run works; the sweep fails records not renewed in time.
   runRenewedAt DateTime?
-  createdAt   DateTime  @default(now())
-  processedAt DateTime?
+  createdAt    DateTime  @default(now())
+  processedAt  DateTime?
 
   @@map("jobs")
 }

@@ -1,21 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type {
   AccountType,
   InstallationStatus,
 } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
-import type {
+import {
   CommentCategory,
   CommentSeverity,
-  JobStatus,
-  ReviewStatus,
+  type JobStatus,
+  type ReviewStatus,
 } from "@/generated/prisma/enums";
 import { describeError } from "@/lib/errors";
 import type { AccessScope } from "@/types/access";
 import type { InstallationId, RepositoryId, ReviewId } from "@/types/branded";
 import type { Result } from "@/types/results";
 import { err, ok } from "@/types/results";
-import type { ReviewClaimRef } from "@/types/review";
+import type { ReviewClaimRef, ReviewResult } from "@/types/review";
 import {
   mergeWithDefaults,
   type RepositorySettings,
@@ -366,11 +367,17 @@ function updateReviewAndDropComments(
   reviewId: ReviewId,
   where: Prisma.ReviewWhereInput,
   data: Prisma.ReviewUpdateManyMutationInput,
+  options: { readonly dropChunkAnalyses: boolean } = {
+    dropChunkAnalyses: false,
+  },
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const { count } = await tx.review.updateMany({ where, data });
     if (count === 0) return false;
     await tx.reviewComment.deleteMany({ where: { reviewId } });
+    if (options.dropChunkAnalyses) {
+      await tx.reviewChunkAnalysis.deleteMany({ where: { reviewId } });
+    }
     return true;
   });
 }
@@ -603,18 +610,26 @@ export async function markReviewCompleted(
   coveredFilePaths?: readonly string[],
 ): Promise<Result<boolean, string>> {
   return runQuery("Failed to mark review completed", async () => {
-    const { count } = await prisma.review.updateMany({
-      where: currentClaimFilter(claim),
-      data: {
-        status: "COMPLETED",
-        processingTimeMs,
-        completedAt: new Date(),
-        ...(coveredFilePaths === undefined
-          ? {}
-          : { coveredFilePaths: [...coveredFilePaths] }),
-      },
+    const completed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.review.updateMany({
+        where: currentClaimFilter(claim),
+        data: {
+          status: "COMPLETED",
+          processingTimeMs,
+          completedAt: new Date(),
+          ...(coveredFilePaths === undefined
+            ? {}
+            : { coveredFilePaths: [...coveredFilePaths] }),
+        },
+      });
+      if (count === 0) return false;
+      // No retry runs after completion, so the chunk analyses are done with.
+      await tx.reviewChunkAnalysis.deleteMany({
+        where: { reviewId: claim.reviewId },
+      });
+      return true;
     });
-    return ok(count > 0);
+    return ok(completed);
   });
 }
 
@@ -640,6 +655,7 @@ export async function markReviewSuperseded(
         processingTimeMs,
         completedAt: new Date(),
       },
+      { dropChunkAnalyses: true },
     );
     return ok(superseded);
   });
@@ -647,12 +663,16 @@ export async function markReviewSuperseded(
 
 /**
  * Marks a review FAILED and drops any findings saved before the failure, since
- * they may never have been posted to GitHub. Returns false (and writes
- * nothing) when the claim was lost.
+ * they may never have been posted to GitHub. Its chunk analyses are kept for
+ * a retry unless `dropChunkAnalyses` says none will come. Returns false (and
+ * writes nothing) when the claim was lost.
  */
 export async function failReview(
   claim: ReviewClaimRef,
   errorMessage: string,
+  options: { readonly dropChunkAnalyses: boolean } = {
+    dropChunkAnalyses: false,
+  },
 ): Promise<Result<boolean, string>> {
   return runQuery("Failed to mark review as failed", async () => {
     const failed = await updateReviewAndDropComments(
@@ -664,8 +684,107 @@ export async function failReview(
         issuesFound: 0,
         completedAt: new Date(),
       },
+      options,
     );
     return ok(failed);
+  });
+}
+
+// --- Chunk analyses (#143) ---
+
+const MAX_INT_COLUMN = 2_147_483_647;
+
+function clampToIntColumn(value: number): number {
+  return Math.min(Math.max(Math.round(value), 0), MAX_INT_COLUMN);
+}
+
+const NUL = "\u0000";
+
+// jsonb rejects NUL and an unpaired surrogate in a string, either of which
+// would fail the write.
+function toJsonbText(text: string): string {
+  return text.replaceAll(NUL, "").toWellFormed();
+}
+
+const storedFindingsSchema = z.array(
+  z.object({
+    filePath: z.string(),
+    lineNumber: z.number().int(),
+    category: z.enum(CommentCategory),
+    severity: z.enum(CommentSeverity),
+    message: z.string(),
+    suggestion: z.string(),
+    confidence: z.number(),
+  }),
+);
+
+/**
+ * Keeps a chunk's successful analysis on its review, so a retry of the job
+ * need not send the chunk again. Saving a chunk already saved is a no-op.
+ * Returns false (and writes nothing) when the claim was lost: the review may
+ * be completed, and its analyses deleted, already.
+ */
+export async function saveChunkAnalysis(
+  claim: ReviewClaimRef,
+  chunkKey: string,
+  result: ReviewResult,
+): Promise<Result<boolean, string>> {
+  return runQuery("Failed to save chunk analysis", async () => {
+    const saved = await prisma.$transaction(async (tx) => {
+      // Updating the review under the claim locks its row, so completing the
+      // review (which deletes its analyses) waits for this insert or sees it.
+      const { count } = await tx.review.updateMany({
+        where: currentClaimFilter(claim),
+        data: { claimRenewedAt: new Date() },
+      });
+      if (count === 0) return false;
+      await tx.reviewChunkAnalysis.createMany({
+        data: {
+          reviewId: claim.reviewId,
+          chunkKey,
+          findings: result.findings.map((finding) => ({
+            ...finding,
+            filePath: toJsonbText(finding.filePath),
+            message: toJsonbText(finding.message),
+            suggestion: toJsonbText(finding.suggestion),
+          })),
+          truncated: result.truncated,
+          inputTokens: clampToIntColumn(result.tokenUsage.inputTokens),
+          outputTokens: clampToIntColumn(result.tokenUsage.outputTokens),
+        },
+        skipDuplicates: true,
+      });
+      return true;
+    });
+    return ok(saved);
+  });
+}
+
+/** The saved analyses of the review's chunks with the given keys, by key. */
+export async function findChunkAnalyses(
+  reviewId: ReviewId,
+  chunkKeys: readonly string[],
+): Promise<Result<ReadonlyMap<string, ReviewResult>, string>> {
+  return runQuery("Failed to find chunk analyses", async () => {
+    const rows = await prisma.reviewChunkAnalysis.findMany({
+      where: { reviewId, chunkKey: { in: [...chunkKeys] } },
+    });
+    const analyses = new Map<string, ReviewResult>();
+    for (const row of rows) {
+      const findings = storedFindingsSchema.safeParse(row.findings);
+      // A row that no longer reads as findings is left out, and the chunk is
+      // analysed again.
+      if (!findings.success) continue;
+      analyses.set(row.chunkKey, {
+        findings: findings.data,
+        truncated: row.truncated,
+        tokenUsage: {
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+        },
+      });
+    }
+    return ok(analyses);
   });
 }
 
