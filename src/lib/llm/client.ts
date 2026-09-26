@@ -87,8 +87,7 @@ export function createLlmClient(options?: LlmClientOptions): LLMService {
         ? parseTruncatedLlmReviewResponse(responseText, confidenceThreshold)
         : parseLlmReviewResponse(responseText, confidenceThreshold);
       if (!parseResult.success) {
-        // Cut off before any finding was complete: the limit, not bad output.
-        return err(truncated ? "LLM_OUTPUT_LIMIT_REACHED" : parseResult.error);
+        return parseResult;
       }
 
       return ok({

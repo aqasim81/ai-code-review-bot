@@ -47,7 +47,9 @@ export function parseLlmReviewResponse(
 
 /**
  * Parses a reply cut off at the output token limit: keeps the findings that
- * were complete before the cut and drops the partial one.
+ * were complete before the cut and drops the partial one. A cut before any
+ * item was complete is LLM_OUTPUT_LIMIT_REACHED; a closed or repaired array
+ * that is not valid JSON is still LLM_INVALID_RESPONSE.
  */
 export function parseTruncatedLlmReviewResponse(
   responseText: string,
@@ -55,12 +57,12 @@ export function parseTruncatedLlmReviewResponse(
 ): Result<readonly ReviewFinding[], LLMError> {
   const arrayStart = responseText.indexOf("[");
   if (arrayStart === -1) {
-    return err("LLM_INVALID_RESPONSE");
+    return err("LLM_OUTPUT_LIMIT_REACHED");
   }
 
   const repaired = closeAfterCompleteItems(responseText, arrayStart);
   if (repaired === null) {
-    return err("LLM_INVALID_RESPONSE");
+    return err("LLM_OUTPUT_LIMIT_REACHED");
   }
   return parseLlmReviewResponse(repaired, confidenceThreshold);
 }
