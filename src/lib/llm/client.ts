@@ -181,9 +181,24 @@ async function executeSingleLlmCall(
       messages: [{ role: "user", content: userMessage }],
     });
 
+    // The stop reason comes first: a refusal's partial text is not a review,
+    // and a reply stopped at the limit may hold thinking only, since thinking
+    // counts toward max_tokens. Newer models also stop at a full context window
+    // with model_context_window_exceeded, which the SDK types only in its beta
+    // namespace; the stop-reason docs say to treat it as cut off.
+    const stopReason: string | null = response.stop_reason;
+    if (stopReason === "refusal") {
+      return err({ error: "LLM_REFUSED", retryAfterMs: null });
+    }
+    const truncated =
+      stopReason === "max_tokens" ||
+      stopReason === "model_context_window_exceeded";
     const textBlock = response.content.find((block) => block.type === "text");
     if (textBlock === undefined || textBlock.type !== "text") {
-      return err({ error: "LLM_INVALID_RESPONSE", retryAfterMs: null });
+      return err({
+        error: truncated ? "LLM_OUTPUT_LIMIT_REACHED" : "LLM_INVALID_RESPONSE",
+        retryAfterMs: null,
+      });
     }
 
     logger.info("LLM call completed", {
@@ -196,7 +211,7 @@ async function executeSingleLlmCall(
       responseText: textBlock.text,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
-      truncated: response.stop_reason === "max_tokens",
+      truncated,
     });
   } catch (error: unknown) {
     return err({

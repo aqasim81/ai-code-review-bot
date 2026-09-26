@@ -231,6 +231,112 @@ describe("parseLlmReviewResponse", () => {
   });
 });
 
+describe("parseLlmReviewResponse — where the findings are in the reply (#121)", () => {
+  const finding = JSON.stringify({
+    filePath: "src/a.ts",
+    lineNumber: 3,
+    category: "BUGS",
+    severity: "WARNING",
+    message: "Found [one] issue",
+    suggestion: "Fix it.",
+    confidence: 0.9,
+  });
+
+  it.each([
+    ["prose after the array", `[${finding}]\n\nThat is all.`],
+    [
+      "a code fence before the fenced findings",
+      `Context:\n\`\`\`ts\nconst x = items[0];\n\`\`\`\nFindings:\n\`\`\`json\n[${finding}]\n\`\`\``,
+    ],
+    [
+      "brackets in the preamble",
+      `Looking at \`items[0]\` and [src/a.ts]:\n[${finding}]`,
+    ],
+    [
+      "brackets before and prose after",
+      `See [src/a.ts]:\n[${finding}]\nSee also [docs].`,
+    ],
+  ])("finds the findings with %s", (_label, text) => {
+    const result = parseLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
+  });
+
+  it.each([
+    [
+      "an example array before it",
+      `Format: [{"foo": "bar"}]\nFindings:\n[${finding}]`,
+    ],
+    [
+      "a fenced example before the fenced findings",
+      `\`\`\`json\n[{"example": true}]\n\`\`\`\nFindings:\n\`\`\`json\n[${finding}]\n\`\`\``,
+    ],
+  ])("prefers the array holding findings over %s", (_label, text) => {
+    const result = parseLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
+  });
+
+  // Two arrays of well-formed findings can't be told apart (an example before
+  // or after the answer): fail as bad output, which a retry can fix, rather
+  // than silently keep the wrong one.
+  it.each([
+    [
+      "before",
+      (example: string, real: string) =>
+        `For example:\n${example}\nThe findings:\n${real}`,
+    ],
+    [
+      "after",
+      (example: string, real: string) =>
+        `The findings:\n${real}\nFor example:\n${example}`,
+    ],
+  ])(
+    "treats a well-formed example %s the findings as bad output",
+    (_label, compose) => {
+      const example = `[${finding.replace("Found [one] issue", "EXAMPLE")}]`;
+      const real = `[${finding}, ${finding.replace("src/a.ts", "src/b.ts")}]`;
+
+      expect(parseLlmReviewResponse(compose(example, real))).toEqual({
+        success: false,
+        error: "LLM_INVALID_RESPONSE",
+      });
+    },
+  );
+
+  it("finds the findings after many empty arrays in the prose", () => {
+    const prose = Array.from({ length: 25 }, () => "see []").join(" ");
+
+    const result = parseLlmReviewResponse(`${prose}\n[${finding}]`);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toHaveLength(1);
+  });
+
+  // A reply is at most ~16000 tokens; parsing it must stay linear-ish.
+  it("parses a long reply full of unclosed [{ quickly", () => {
+    const text = "x [{".repeat(16_000);
+    const startedAt = performance.now();
+
+    parseLlmReviewResponse(text);
+    parseTruncatedLlmReviewResponse(text);
+
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("still returns an empty array for a reply of [] after prose", () => {
+    expect(parseLlmReviewResponse("No issues [none]:\n[]")).toEqual({
+      success: true,
+      data: [],
+    });
+  });
+});
+
 describe("parseTruncatedLlmReviewResponse", () => {
   const complete = (message: string) =>
     JSON.stringify({
@@ -273,10 +379,89 @@ describe("parseTruncatedLlmReviewResponse", () => {
     expect(result).toEqual({ success: true, data: [] });
   });
 
+  // A "[" in the prose before the findings is not where they start (#121).
+  it("skips brackets in the prose before the findings", () => {
+    const text = `Looking at \`items[0]\` and [src/a.ts]:\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("prefers the cut-off array holding findings over an example array", () => {
+    const text = `Format: [{"foo": "bar"}]\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("reads the cut-off array, not a well-formed example before it", () => {
+    const text = `For example:\n[${complete("EXAMPLE")}]\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("returns LLM_OUTPUT_LIMIT_REACHED when the cut-off array after an example holds no complete finding", () => {
+    const text = `For example:\n[${complete("EXAMPLE")}]\n[{"filePath": "src/b.ts"`;
+
+    expect(parseTruncatedLlmReviewResponse(text)).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+  });
+
+  it("finds the cut-off findings after many empty arrays in the prose", () => {
+    const prose = Array.from({ length: 25 }, () => "see []").join(" ");
+
+    const result = parseTruncatedLlmReviewResponse(
+      `${prose}\n[${complete("kept")}, {"filePath": "src/b.ts"`,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("returns LLM_OUTPUT_LIMIT_REACHED when only the prose holds brackets", () => {
+    expect(
+      parseTruncatedLlmReviewResponse(
+        'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts", "message": "cut',
+      ),
+    ).toEqual({ success: false, error: "LLM_OUTPUT_LIMIT_REACHED" });
+  });
+
+  // The limit cut the reply before anything could be kept (#120).
   it.each([
     ["no complete finding", '[{"filePath": "src/a.ts", "message": "cut'],
     ["no array", "I could not review this because"],
-  ])("returns LLM_INVALID_RESPONSE when there is %s", (_label, text) => {
+    ["no text", ""],
+  ])("returns LLM_OUTPUT_LIMIT_REACHED when there is %s", (_label, text) => {
+    expect(parseTruncatedLlmReviewResponse(text)).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+  });
+
+  // Bad output the limit did not cause stays bad output, so a retry can help (#120).
+  it.each([
+    [
+      "an array that closed before the cut but is not JSON",
+      '[{"filePath": src/a.ts}] That is all, and then',
+    ],
+    [
+      "a complete item that is not JSON",
+      `[{"filePath": src/a.ts}, ${complete("second")}, {"filePath": "src/b.ts"`,
+    ],
+  ])("returns LLM_INVALID_RESPONSE for %s", (_label, text) => {
     expect(parseTruncatedLlmReviewResponse(text)).toEqual({
       success: false,
       error: "LLM_INVALID_RESPONSE",

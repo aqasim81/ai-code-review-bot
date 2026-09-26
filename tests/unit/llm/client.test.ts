@@ -248,6 +248,135 @@ describe("createLlmClient", () => {
     expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
   });
 
+  // The model thinks by default and thinking counts toward max_tokens, so a
+  // reply can stop at the limit with thinking and no text (#120).
+  it("reports the output limit, not bad output, when thinking used the whole limit (#120)", async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        { type: "thinking", thinking: "Let me look...", signature: "" },
+      ],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 100, output_tokens: 16_000 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  // Through the real parser: only a reply cut before any complete item is the
+  // limit; a cut-off reply whose JSON is invalid is still bad output (#120).
+  it.each([
+    [
+      "no complete finding",
+      '[{"filePath": "src/a.ts"',
+      "LLM_OUTPUT_LIMIT_REACHED",
+    ],
+    [
+      "an array that closed before the cut but is not JSON",
+      '[{"filePath": src/a.ts}] That is all, and then',
+      "LLM_INVALID_RESPONSE",
+    ],
+    [
+      "a complete item that is not JSON",
+      '[{"filePath": src/a.ts}, {"filePath": "src/b.ts"',
+      "LLM_INVALID_RESPONSE",
+    ],
+  ])(
+    "classifies a cut-off reply with %s by what cut it (#120)",
+    async (_label, text, error) => {
+      const parser = await import("@/lib/llm/parser");
+      const actualParser =
+        await vi.importActual<typeof import("@/lib/llm/parser")>(
+          "@/lib/llm/parser",
+        );
+      vi.mocked(parser.parseTruncatedLlmReviewResponse).mockImplementationOnce(
+        actualParser.parseTruncatedLlmReviewResponse,
+      );
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text }],
+        stop_reason: "max_tokens",
+        usage: { input_tokens: 100, output_tokens: 16_000 },
+      });
+
+      const service = createLlmClient({ apiKey: "test-key" });
+      const result = await service.analyzeReviewChunk(
+        createReviewChunk(),
+        createReviewPromptOptions(),
+      );
+
+      expect(result).toEqual({ success: false, error });
+    },
+  );
+
+  // Returned without a beta header by newer models, though the SDK types it
+  // only in its beta namespace; the provider's docs say to treat it as cut off.
+  it("treats a reply that filled the context window as cut off (#120)", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: '[{"filePath": "src/a.ts"' }],
+      stop_reason: "model_context_window_exceeded",
+      usage: { input_tokens: 190_000, output_tokens: 10_000 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({ truncated: true }),
+    });
+    expect(parser.parseTruncatedLlmReviewResponse).toHaveBeenCalled();
+    expect(parser.parseLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
+  it("reports a refusal without parsing its partial text or retrying (#120)", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "[]" }],
+      stop_reason: "refusal",
+      usage: { input_tokens: 100, output_tokens: 3 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({ success: false, error: "LLM_REFUSED" });
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(parser.parseLlmReviewResponse).not.toHaveBeenCalled();
+    expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
+  it("reports a refusal that came with no text (#120)", async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [],
+      stop_reason: "refusal",
+      usage: { input_tokens: 100, output_tokens: 0 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({ success: false, error: "LLM_REFUSED" });
+  });
+
   it("turns off the SDK's own retries so a chunk is retried only here", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });

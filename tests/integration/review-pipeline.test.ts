@@ -1416,6 +1416,47 @@ describe("executeReview — a chunk whose analysis fails", () => {
     expect(result.success && result.data.summary).toContain(note);
   });
 
+  it("goes on without a chunk whose thinking used the whole output limit and names it (#120)", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_OUTPUT_LIMIT_REACHED"))
+        .mockResolvedValueOnce(ok(createReviewResult())),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(3);
+    const note =
+      "Not reviewed because the analysis hit its output limit: `src/b.ts`.";
+    expect(result.success && result.data.summary).toContain(note);
+    expect(result.success && result.data.summary).not.toContain(
+      "Not reviewed because the analysis failed",
+    );
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+  });
+
+  it("goes on without a chunk the model refused, not retrying the job (#120)", async () => {
+    const github = githubWithThreeChunks();
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockResolvedValueOnce(err("LLM_REFUSED"))
+        .mockResolvedValueOnce(ok(createReviewResult())),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(3);
+    expect(result.success && result.data.summary).toContain(
+      "Not reviewed because the analysis failed: `src/b.ts`.",
+    );
+    expect(github.postPullRequestReview).toHaveBeenCalled();
+  });
+
   it("reports the review as rejected when every chunk is rejected", async () => {
     const github = githubWithThreeChunks();
     const llm = createMockLlmService({
