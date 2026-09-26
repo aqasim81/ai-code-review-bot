@@ -160,7 +160,23 @@ export interface ReviewRequest {
    * failing is left out rather than failing the whole review.
    */
   readonly isFinalAttempt: boolean;
-  readonly filePathFilter?: readonly string[];
+  /**
+   * When GitHub reported the commit as the pull request's head: the event's
+   * own time, which retries, delays and redeliveries keep. Orders what the
+   * review writes against what later events wrote.
+   */
+  readonly eventAt: Date;
+  /** For a push review: the earlier review it builds on. Absent for a full review. */
+  readonly pushReviewBase?: PushReviewBase;
+}
+
+export interface PushReviewBase {
+  /** Files changed between the base review's commit and this one. */
+  readonly changedFilePaths: readonly string[];
+  /** Files of the pull request the base review counted as reviewed. */
+  readonly coveredFilePaths: readonly string[];
+  /** The settings the base review ran with; null when not recorded. */
+  readonly settingsFingerprint: string | null;
 }
 
 export interface ReviewEngineResult {

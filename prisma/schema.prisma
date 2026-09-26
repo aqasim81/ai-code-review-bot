@@ -72,6 +72,8 @@ model Repository {
   settings       Json         @default("{}")
   /// Set when the repository is removed from the installation; cleared when it is added back.
   removedAt      DateTime?
+  /// When GitHub reported `fullName`; an older report never overwrites a newer one.
+  fullNameSeenAt DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   reviews        Review[]
@@ -94,11 +96,18 @@ model Review {
   claimToken          String?
   /// Set when the review is claimed and renewed while the owning attempt runs.
   claimRenewedAt      DateTime? @map("processingStartedAt")
+  /// When GitHub reported the commit as the pull request's head (the time the
+  /// review's job was queued). Orders reviews by push, not by when they finished.
+  headSeenAt          DateTime?
+  /// Files of the pull request counted as reviewed at this commit.
+  coveredFilePaths    String[]        @default([])
+  /// The settings that shaped the findings; a change means a full review.
+  settingsFingerprint String?
   createdAt           DateTime        @default(now())
   completedAt         DateTime?
   comments            ReviewComment[]
 
-  @@unique([repositoryId, commitSha])
+  @@unique([repositoryId, pullRequestNumber, commitSha])
   @@index([repositoryId, pullRequestNumber, status, createdAt])
   @@map("reviews")
 }

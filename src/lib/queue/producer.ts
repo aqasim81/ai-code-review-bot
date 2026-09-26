@@ -57,12 +57,19 @@ function buildDeterministicJobId(jobData: ReviewJobData): string {
   return `review-${repositoryFullName}-${pullRequestNumber}-${commitSha}-${JOB_ID_SUFFIX[jobData.type]}`;
 }
 
+// A job in one of these states has finished running.
+const FINISHED_JOB_STATES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+]);
+
 /**
  * BullMQ ignores `add()` while a job with the same ID is kept, which would
- * swallow a reopen or redelivery that should reclaim a FAILED review. A job in
- * the failed set is removed so the new one can be added. A waiting, active,
- * delayed or completed job is kept and returned, so the caller can skip the
- * redelivery and say so in the logs.
+ * swallow a reopen or redelivery that should run again. A finished job
+ * (completed or failed) is removed so the new one can be added: a completed
+ * job may have been a skip or a superseded review (#126), and the engine
+ * skips a commit already reviewed. A waiting, active or delayed job is kept
+ * and returned, so the caller can skip the redelivery and say so in the logs.
  */
 async function findLiveJobWithSameId(
   queue: Queue,
@@ -70,11 +77,26 @@ async function findLiveJobWithSameId(
 ): Promise<Job | null> {
   const existingJob = await queue.getJob(jobId);
   if (!existingJob) return null;
-  if (!(await existingJob.isFailed())) return existingJob;
+  const state = await existingJob.getState();
+  // Removed since it was read (BullMQ trims kept jobs): nothing to remove.
+  if (state === "unknown") return null;
+  if (!FINISHED_JOB_STATES.has(state)) return existingJob;
 
-  await existingJob.remove();
-  logger.info("Removed failed review job so it can be re-triggered", {
+  try {
+    await existingJob.remove();
+  } catch (error) {
+    // Another re-trigger removed the finished job and added a new one, which
+    // is now running (BullMQ refuses to remove a locked job).
+    const current = await queue.getJob(jobId);
+    if (current && !FINISHED_JOB_STATES.has(await current.getState())) {
+      return current;
+    }
+    // throw-ok: enqueueJob catches it and returns QUEUE_ENQUEUE_FAILED.
+    throw error;
+  }
+  logger.info("Removed finished review job so it can be re-triggered", {
     jobId,
+    state,
   });
   return null;
 }
@@ -147,7 +169,7 @@ async function enqueueJob(
       ENQUEUE_TIMEOUT_MS,
     );
     if (outcome.kind === "already-queued") {
-      logger.info("Review job already queued or done, skipping", logContext);
+      logger.info("Review job already queued or running, skipping", logContext);
       return ok({ jobId });
     }
 

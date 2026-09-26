@@ -75,8 +75,16 @@ async function saveInstallationRepositories(
             githubRepoId: repo.githubRepoId,
           },
         },
-        update: { fullName: repo.fullName, removedAt: null },
-        create: { installationId: saved.id, ...repo },
+        update: {
+          fullName: repo.fullName,
+          fullNameSeenAt: new Date(),
+          removedAt: null,
+        },
+        create: {
+          installationId: saved.id,
+          ...repo,
+          fullNameSeenAt: new Date(),
+        },
       });
     }
     return saved.id as InstallationId;
@@ -154,6 +162,8 @@ interface RepositoryForReviewInput {
   readonly githubInstallationId: number;
   readonly githubRepoId: number;
   readonly fullName: string;
+  /** When GitHub reported `fullName`: the time the review's job was queued. */
+  readonly nameSeenAt: Date;
 }
 
 type RepositoryForReview = {
@@ -173,7 +183,7 @@ const REVIEW_REPOSITORY_SELECT = {
 /**
  * Finds the repository a review job is for by its GitHub ID under the job's
  * installation, so renames and old installations cannot mislead it. The
- * stored name follows GitHub's. A missing row is created: a signed
+ * stored name follows GitHub's newest report of it. A missing row is created: a signed
  * pull_request webhook proves the installation can see the repository.
  * Returns null when the installation is unknown or not active, or when the
  * repository was removed from the installation.
@@ -198,16 +208,31 @@ export async function findOrCreateRepositoryForReview(
     if (!existing || existing.removedAt) return ok(null);
 
     if (existing.fullName !== input.fullName) {
-      await prisma.repository.update({
-        where: { id: existing.id },
-        data: { fullName: input.fullName },
-      });
+      await updateRepositoryNameUnlessNewer(existing.id, input);
     }
     return ok({
       id: existing.id as RepositoryId,
       isEnabled: existing.isEnabled,
       settings: mergeWithDefaults(existing.settings),
     });
+  });
+}
+
+// A job retried after a rename still carries the name from when it was
+// queued; it must not overwrite a name GitHub reported later (#127).
+async function updateRepositoryNameUnlessNewer(
+  id: string,
+  input: RepositoryForReviewInput,
+): Promise<void> {
+  await prisma.repository.updateMany({
+    where: {
+      id,
+      OR: [
+        { fullNameSeenAt: null },
+        { fullNameSeenAt: { lt: input.nameSeenAt } },
+      ],
+    },
+    data: { fullName: input.fullName, fullNameSeenAt: input.nameSeenAt },
   });
 }
 
@@ -228,6 +253,7 @@ async function createRepositoryForReview(input: RepositoryForReviewInput) {
         installationId: installation.id,
         githubRepoId: input.githubRepoId,
         fullName: input.fullName,
+        fullNameSeenAt: input.nameSeenAt,
       },
       select: REVIEW_REPOSITORY_SELECT,
     });
@@ -246,15 +272,23 @@ async function createRepositoryForReview(input: RepositoryForReviewInput) {
   }
 }
 
+export interface PushReviewBaseRecord {
+  readonly commitSha: string;
+  readonly coveredFilePaths: readonly string[];
+  readonly settingsFingerprint: string | null;
+}
+
 /**
- * The head commit of the most recent completed review of a pull request, the
- * base a push review is diffed against. Null when no review completed.
+ * The completed review of the pull request's newest reviewed commit, the base
+ * a push review is diffed against. Reviews are ordered by when GitHub
+ * reported their commit as the head, not by when they finished: a retry of an
+ * older push can finish last (#128). Null when no review completed.
  */
-export async function findLastReviewedCommitSha(input: {
+export async function findPushReviewBase(input: {
   readonly githubInstallationId: number;
   readonly githubRepoId: number;
   readonly pullRequestNumber: number;
-}): Promise<Result<string | null, string>> {
+}): Promise<Result<PushReviewBaseRecord | null, string>> {
   return runQuery("Failed to find the last reviewed commit", async () => {
     const review = await prisma.review.findFirst({
       where: {
@@ -266,22 +300,34 @@ export async function findLastReviewedCommitSha(input: {
         },
       },
       orderBy: [
+        { headSeenAt: { sort: "desc", nulls: "last" } },
         { completedAt: { sort: "desc", nulls: "last" } },
         { createdAt: "desc" },
       ],
-      select: { commitSha: true },
+      select: {
+        commitSha: true,
+        coveredFilePaths: true,
+        settingsFingerprint: true,
+      },
     });
-    return ok(review?.commitSha ?? null);
+    return ok(review ?? null);
   });
 }
 
-export async function findExistingReviewByCommitSha(
+export async function findExistingReviewForPullRequestCommit(
   repositoryId: RepositoryId,
+  pullRequestNumber: number,
   commitSha: string,
 ): Promise<Result<{ id: ReviewId; status: ReviewStatus } | null, string>> {
   return runQuery("Failed to check existing review", async () => {
     const review = await prisma.review.findUnique({
-      where: { repositoryId_commitSha: { repositoryId, commitSha } },
+      where: {
+        repositoryId_pullRequestNumber_commitSha: {
+          repositoryId,
+          pullRequestNumber,
+          commitSha,
+        },
+      },
       select: { id: true, status: true },
     });
     return ok(
@@ -292,7 +338,8 @@ export async function findExistingReviewByCommitSha(
 
 interface ClaimExistingReviewInput {
   readonly jobId: string;
-  readonly pullRequestNumber: number;
+  /** When GitHub reported the commit as the head, for the claiming job. */
+  readonly headSeenAt: Date;
   readonly staleBefore: Date;
 }
 
@@ -399,8 +446,10 @@ export async function claimExistingReview(
         claimedByJobId: claim.jobId,
         claimToken,
         claimRenewedAt: new Date(),
-        pullRequestNumber: claim.pullRequestNumber,
+        headSeenAt: claim.headSeenAt,
         summary: null,
+        coveredFilePaths: [],
+        settingsFingerprint: null,
         issuesFound: 0,
         processingTimeMs: null,
         completedAt: null,
@@ -415,10 +464,11 @@ interface CreateReviewInput {
   pullRequestNumber: number;
   commitSha: string;
   claimedByJobId: string;
+  headSeenAt: Date;
 }
 
 // For reviews, the only unique key an insert can hit is (repositoryId,
-// commitSha); the id is a random UUID. The pg adapter does not fill
+// pullRequestNumber, commitSha); the id is a random UUID. The pg adapter does not fill
 // `meta.target`, so the error code is the reliable signal.
 function isUniqueConstraintViolation(error: unknown): boolean {
   return (
@@ -429,8 +479,8 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 
 /**
  * Creates a PROCESSING review claimed by the given job. Returns null when a
- * review for the same repository and commit already exists, i.e. another job
- * created it first.
+ * review for the same pull request and commit already exists, i.e. another
+ * job created it first.
  */
 export async function createReviewRecord(
   input: CreateReviewInput,
@@ -446,6 +496,7 @@ export async function createReviewRecord(
         claimedByJobId: input.claimedByJobId,
         claimToken,
         claimRenewedAt: new Date(),
+        headSeenAt: input.headSeenAt,
       },
     });
     return ok({ reviewId: review.id as ReviewId, claimToken });
@@ -470,6 +521,8 @@ interface SaveReviewFindingsInput extends ReviewClaimRef {
   summary: string;
   issuesFound: number;
   comments: SaveReviewCommentInput[];
+  coveredFilePaths: readonly string[];
+  settingsFingerprint: string;
 }
 
 /** Matches the review only while this attempt's claim is still current. */
@@ -492,7 +545,12 @@ export async function saveReviewFindings(
     const saved = await prisma.$transaction(async (tx) => {
       const { count } = await tx.review.updateMany({
         where: currentClaimFilter(input),
-        data: { summary: input.summary, issuesFound: input.issuesFound },
+        data: {
+          summary: input.summary,
+          issuesFound: input.issuesFound,
+          coveredFilePaths: [...input.coveredFilePaths],
+          settingsFingerprint: input.settingsFingerprint,
+        },
       });
       if (count === 0) return false;
       await tx.reviewComment.createMany({
@@ -535,15 +593,26 @@ export async function renewReviewClaim(
   });
 }
 
-/** Returns false (and writes nothing) when the claim was lost. */
+/**
+ * Returns false (and writes nothing) when the claim was lost. Given
+ * `coveredFilePaths`, it replaces the ones saved with the findings.
+ */
 export async function markReviewCompleted(
   claim: ReviewClaimRef,
   processingTimeMs: number,
+  coveredFilePaths?: readonly string[],
 ): Promise<Result<boolean, string>> {
   return runQuery("Failed to mark review completed", async () => {
     const { count } = await prisma.review.updateMany({
       where: currentClaimFilter(claim),
-      data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
+      data: {
+        status: "COMPLETED",
+        processingTimeMs,
+        completedAt: new Date(),
+        ...(coveredFilePaths === undefined
+          ? {}
+          : { coveredFilePaths: [...coveredFilePaths] }),
+      },
     });
     return ok(count > 0);
   });

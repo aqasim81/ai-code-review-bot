@@ -7,6 +7,12 @@ export interface ReviewJobPayload {
   readonly repositoryFullName: string;
   readonly pullRequestNumber: number;
   readonly commitSha: string;
+  /**
+   * When GitHub reported the event (the pull request's `updated_at`, ISO
+   * 8601). A redelivery keeps the original time. Absent on jobs queued before
+   * it was added.
+   */
+  readonly eventAt?: string;
 }
 
 export type ReviewJobData =

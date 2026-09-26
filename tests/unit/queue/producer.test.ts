@@ -34,9 +34,9 @@ const GITHUB_DELIVERY_TIMEOUT_MS = 10_000;
 // The whole enqueue, every Valkey step together, gets 5 s of that.
 const ENQUEUE_BUDGET_MS = 5_000;
 
-function existingJob(failed: boolean) {
+function existingJob(state: string) {
   return {
-    isFailed: vi.fn().mockResolvedValue(failed),
+    getState: vi.fn().mockResolvedValue(state),
     remove: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -74,31 +74,39 @@ describe("review job producer", () => {
     expect(queueGetJob).toHaveBeenNthCalledWith(2, FULL_JOB_ID);
   });
 
-  it("removes a failed job with the same ID before enqueueing a re-trigger", async () => {
-    const failedJob = existingJob(true);
-    queueGetJob.mockResolvedValueOnce(failedJob);
+  // A completed job may have ended as a skip or a superseded review; the
+  // engine, not the queue, knows whether the commit was reviewed (#126).
+  it.each(["failed", "completed"])(
+    "removes a %s job with the same ID before enqueueing a re-trigger",
+    async (state) => {
+      const finishedJob = existingJob(state);
+      queueGetJob.mockResolvedValueOnce(finishedJob);
 
-    const result = await enqueueReviewJob(PAYLOAD);
+      const result = await enqueueReviewJob(PAYLOAD);
 
-    expect(result.success).toBe(true);
-    expect(queueGetJob).toHaveBeenCalledWith(FULL_JOB_ID);
-    expect(failedJob.remove).toHaveBeenCalledOnce();
-    expect(failedJob.remove.mock.invocationCallOrder[0]).toBeLessThan(
-      queueAdd.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(addedJobId(0)).toBe(FULL_JOB_ID);
-  });
+      expect(result.success).toBe(true);
+      expect(queueGetJob).toHaveBeenCalledWith(FULL_JOB_ID);
+      expect(finishedJob.remove).toHaveBeenCalledOnce();
+      expect(finishedJob.remove.mock.invocationCallOrder[0]).toBeLessThan(
+        queueAdd.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(addedJobId(0)).toBe(FULL_JOB_ID);
+    },
+  );
 
-  it("skips a redelivery while a job with the same ID has not failed", async () => {
-    const liveJob = existingJob(false);
-    queueGetJob.mockResolvedValueOnce(liveJob);
+  it.each(["waiting", "active", "delayed", "prioritized"])(
+    "skips a redelivery while a job with the same ID is %s",
+    async (state) => {
+      const liveJob = existingJob(state);
+      queueGetJob.mockResolvedValueOnce(liveJob);
 
-    const result = await enqueueReviewJob(PAYLOAD);
+      const result = await enqueueReviewJob(PAYLOAD);
 
-    expect(result).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
-    expect(liveJob.remove).not.toHaveBeenCalled();
-    expect(queueAdd).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
+      expect(liveJob.remove).not.toHaveBeenCalled();
+      expect(queueAdd).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns QUEUE_ENQUEUE_FAILED when looking up the existing job fails", async () => {
     queueGetJob.mockRejectedValueOnce(new Error("connection lost"));
@@ -110,13 +118,26 @@ describe("review job producer", () => {
   });
 
   it("returns QUEUE_ENQUEUE_FAILED when removing the failed job fails", async () => {
-    const failedJob = existingJob(true);
+    const failedJob = existingJob("failed");
     failedJob.remove.mockRejectedValueOnce(new Error("job is locked"));
     queueGetJob.mockResolvedValueOnce(failedJob);
 
     const result = await enqueueDeltaReviewJob(PAYLOAD);
 
     expect(result).toEqual({ success: false, error: "QUEUE_ENQUEUE_FAILED" });
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("skips when a racing re-trigger already replaced the finished job and it is running", async () => {
+    const finishedJob = existingJob("completed");
+    finishedJob.remove.mockRejectedValueOnce(new Error("job is locked"));
+    queueGetJob
+      .mockResolvedValueOnce(finishedJob)
+      .mockResolvedValueOnce(existingJob("active"));
+
+    const result = await enqueueReviewJob(PAYLOAD);
+
+    expect(result).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
     expect(queueAdd).not.toHaveBeenCalled();
   });
 

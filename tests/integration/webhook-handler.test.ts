@@ -467,6 +467,42 @@ describe("handlePullRequestEvent", () => {
     expect(enqueueReviewJob).not.toHaveBeenCalled();
   });
 
+  it("queues the event's own time, which a redelivery keeps (#127, #128)", async () => {
+    vi.mocked(enqueueDeltaReviewJob).mockResolvedValueOnce(
+      ok({ jobId: "delta-job-1" }),
+    );
+
+    await handlePullRequestEvent(
+      createPrPayload({
+        action: "synchronize",
+        pull_request: {
+          number: 42,
+          head: { sha: HEAD_SHA },
+          updated_at: "2026-09-01T10:00:00Z",
+        },
+      }),
+    );
+
+    expect(enqueueDeltaReviewJob).toHaveBeenCalledWith(
+      expect.objectContaining({ eventAt: "2026-09-01T10:00:00Z" }),
+    );
+  });
+
+  it("rejects a pull_request payload whose update time is not a date", async () => {
+    const result = await handlePullRequestEvent(
+      createPrPayload({
+        pull_request: {
+          number: 42,
+          head: { sha: HEAD_SHA },
+          updated_at: "yesterday",
+        },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(enqueueReviewJob).not.toHaveBeenCalled();
+  });
+
   it("ignores non-reviewable actions (closed, edited)", async () => {
     const result = await handlePullRequestEvent(
       createPrPayload({ action: "closed" }),

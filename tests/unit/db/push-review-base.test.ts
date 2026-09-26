@@ -4,7 +4,7 @@ const prismaMock = vi.hoisted(() => ({ review: { findFirst: vi.fn() } }));
 
 vi.mock("@/lib/db/prisma-client", () => ({ prisma: prismaMock }));
 
-import { findLastReviewedCommitSha } from "@/lib/db/queries";
+import { findPushReviewBase } from "@/lib/db/queries";
 
 const INPUT = {
   githubInstallationId: 12345,
@@ -12,17 +12,22 @@ const INPUT = {
   pullRequestNumber: 42,
 };
 
-describe("findLastReviewedCommitSha", () => {
+describe("findPushReviewBase", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("returns the commit of the most recent completed review of the pull request", async () => {
-    prismaMock.review.findFirst.mockResolvedValue({ commitSha: "abc" });
+  it("returns the completed review of the newest reviewed commit of the pull request", async () => {
+    const base = {
+      commitSha: "abc",
+      coveredFilePaths: ["src/a.ts"],
+      settingsFingerprint: "fingerprint",
+    };
+    prismaMock.review.findFirst.mockResolvedValue(base);
 
-    const result = await findLastReviewedCommitSha(INPUT);
+    const result = await findPushReviewBase(INPUT);
 
-    expect(result).toEqual({ success: true, data: "abc" });
+    expect(result).toEqual({ success: true, data: base });
     expect(prismaMock.review.findFirst).toHaveBeenCalledWith({
       where: {
         status: "COMPLETED",
@@ -33,17 +38,22 @@ describe("findLastReviewedCommitSha", () => {
         },
       },
       orderBy: [
+        { headSeenAt: { sort: "desc", nulls: "last" } },
         { completedAt: { sort: "desc", nulls: "last" } },
         { createdAt: "desc" },
       ],
-      select: { commitSha: true },
+      select: {
+        commitSha: true,
+        coveredFilePaths: true,
+        settingsFingerprint: true,
+      },
     });
   });
 
   it("returns null when no review of the pull request completed", async () => {
     prismaMock.review.findFirst.mockResolvedValue(null);
 
-    expect(await findLastReviewedCommitSha(INPUT)).toEqual({
+    expect(await findPushReviewBase(INPUT)).toEqual({
       success: true,
       data: null,
     });
@@ -52,7 +62,7 @@ describe("findLastReviewedCommitSha", () => {
   it("returns an error when the database fails", async () => {
     prismaMock.review.findFirst.mockRejectedValue(new Error("down"));
 
-    expect(await findLastReviewedCommitSha(INPUT)).toEqual({
+    expect(await findPushReviewBase(INPUT)).toEqual({
       success: false,
       error: "Failed to find the last reviewed commit: down",
     });
