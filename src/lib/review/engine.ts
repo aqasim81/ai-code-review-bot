@@ -273,12 +273,16 @@ function reviewErrorForGitHubFailure(
   return GITHUB_STEP_ERRORS[step].retryable;
 }
 
-// The model refused the request itself; no retry can fix it.
+// The API or the model refused the request itself, or the model spent the
+// whole output limit before a finding was complete; the same input most likely
+// fails the same way again, so no retry of the job can fix it.
 const REJECTED_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
   "LLM_API_KEY_MISSING",
   "LLM_AUTH_FAILED",
   "LLM_BAD_REQUEST",
   "LLM_CONTEXT_TOO_LONG",
+  "LLM_OUTPUT_LIMIT_REACHED",
+  "LLM_REFUSED",
   "LLM_SPEND_LIMIT_REACHED",
 ]);
 
@@ -433,6 +437,8 @@ interface LlmAnalysisResult {
   readonly totalOutputTokens: number;
   /** Files of chunks whose analysis failed while the rest succeeded. */
   readonly unanalyzedFilePaths: readonly string[];
+  /** Files of chunks whose reply hit the output limit before any finding. */
+  readonly outputLimitFilePaths: readonly string[];
   /** Files of chunks whose reply was cut off at the output limit. */
   readonly truncatedFilePaths: readonly string[];
 }
@@ -501,6 +507,7 @@ async function analyzeAllChunks(
   const allFindings: ReviewFinding[] = [];
   const failedChunkErrors: LLMError[] = [];
   const unanalyzedFilePaths: string[] = [];
+  const outputLimitFilePaths: string[] = [];
   const truncatedFilePaths: string[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -517,7 +524,11 @@ async function analyzeAllChunks(
         return llmAnalysisFailed([result.error]);
       }
       failedChunkErrors.push(result.error);
-      unanalyzedFilePaths.push(...filePaths);
+      if (result.error === "LLM_OUTPUT_LIMIT_REACHED") {
+        outputLimitFilePaths.push(...filePaths);
+      } else {
+        unanalyzedFilePaths.push(...filePaths);
+      }
       continue;
     }
 
@@ -537,6 +548,7 @@ async function analyzeAllChunks(
     totalInputTokens,
     totalOutputTokens,
     unanalyzedFilePaths,
+    outputLimitFilePaths,
     truncatedFilePaths,
   });
 }
@@ -894,6 +906,10 @@ async function analyzeSaveAndPostReview(
     "Not reviewed because the analysis failed",
     llmResult.data.unanalyzedFilePaths,
   );
+  const outputLimitNote = describeFilesNote(
+    "Not reviewed because the analysis hit its output limit",
+    llmResult.data.outputLimitFilePaths,
+  );
   const truncatedNote = describeFilesNote(
     "The review of these files may be incomplete because the analysis hit its output limit",
     llmResult.data.truncatedFilePaths,
@@ -902,6 +918,7 @@ async function analyzeSaveAndPostReview(
     describeFindingCount(findings.length),
     oversizedNote,
     failedAnalysisNote,
+    outputLimitNote,
     truncatedNote,
   ]
     .filter((note) => note !== null)
