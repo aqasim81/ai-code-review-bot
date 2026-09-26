@@ -281,6 +281,31 @@ describe("parseLlmReviewResponse — where the findings are in the reply (#121)"
     expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
   });
 
+  it("prefers the findings after a well-formed example finding", () => {
+    const example = finding.replace("Found [one] issue", "EXAMPLE");
+    const second = finding.replace("src/a.ts", "src/b.ts");
+    const text = `For example:\n[${example}]\nThe findings:\n[${finding}, ${second}]`;
+
+    const result = parseLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((f) => f.filePath)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+  });
+
+  it("finds the findings after many empty arrays in the prose", () => {
+    const prose = Array.from({ length: 25 }, () => "see []").join(" ");
+
+    const result = parseLlmReviewResponse(`${prose}\n[${finding}]`);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toHaveLength(1);
+  });
+
   // A reply is at most ~16000 tokens; parsing it must stay linear-ish.
   it("parses a long reply full of unclosed [{ quickly", () => {
     const text = "x [{".repeat(16_000);
@@ -357,6 +382,37 @@ describe("parseTruncatedLlmReviewResponse", () => {
     const text = `Format: [{"foo": "bar"}]\n[${complete("kept")}, {"filePath": "src/b.ts"`;
 
     const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("reads the cut-off array, not a well-formed example before it", () => {
+    const text = `For example:\n[${complete("EXAMPLE")}]\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("returns LLM_OUTPUT_LIMIT_REACHED when the cut-off array after an example holds no complete finding", () => {
+    const text = `For example:\n[${complete("EXAMPLE")}]\n[{"filePath": "src/b.ts"`;
+
+    expect(parseTruncatedLlmReviewResponse(text)).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+  });
+
+  it("finds the cut-off findings after many empty arrays in the prose", () => {
+    const prose = Array.from({ length: 25 }, () => "see []").join(" ");
+
+    const result = parseTruncatedLlmReviewResponse(
+      `${prose}\n[${complete("kept")}, {"filePath": "src/b.ts"`,
+    );
 
     expect(result.success).toBe(true);
     if (!result.success) return;
