@@ -50,3 +50,18 @@ export function filterFindingsBySettings(
       SEVERITY_RANK[finding.severity] >= minimumRank,
   );
 }
+
+/**
+ * Identifies the settings that decide which findings a review can report.
+ * Exclude patterns are left out: a file they kept out is not counted as
+ * reviewed, so the next push review picks it up once they change.
+ */
+export function fingerprintReviewSettings(
+  settings: Required<RepositorySettings>,
+): string {
+  return JSON.stringify({
+    enabledCategories: [...settings.enabledCategories].sort(),
+    minimumSeverity: settings.minimumSeverity,
+    customInstructions: settings.customInstructions,
+  });
+}

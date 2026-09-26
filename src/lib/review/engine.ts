@@ -3,7 +3,7 @@ import {
   claimExistingReview,
   createReviewRecord,
   failReview,
-  findExistingReviewByCommitSha,
+  findExistingReviewForPullRequestCommit,
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
@@ -26,9 +26,11 @@ import {
   filterReviewableFiles,
 } from "@/lib/review/context-builder";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
+import { selectPushReviewScope } from "@/lib/review/push-review-scope";
 import {
   createExcludedPathMatcher,
   filterFindingsBySettings,
+  fingerprintReviewSettings,
 } from "@/lib/review/settings-filter";
 import {
   REVIEW_CLAIM_MAX_RENEWAL_MS,
@@ -66,6 +68,7 @@ async function lookupRepository(
     githubInstallationId: request.installationId,
     githubRepoId: request.githubRepoId,
     fullName: request.repositoryFullName,
+    nameSeenAt: request.eventReceivedAt,
   });
   if (!repoResult.success) {
     logger.error("Failed to look up repository", {
@@ -103,6 +106,7 @@ async function createNewReviewRecord(
     pullRequestNumber: request.pullRequestNumber,
     commitSha: request.commitSha,
     claimedByJobId: request.jobId,
+    headSeenAt: request.eventReceivedAt,
   });
   if (!createResult.success) {
     logger.error("Failed to create review record", {
@@ -124,11 +128,11 @@ async function claimExistingReviewForRetry(
   existing: { id: ReviewId; status: ReviewStatus },
   request: ReviewRequest,
 ): Promise<Result<ReviewClaimRef, ReviewEngineError>> {
-  const { commitSha, jobId, pullRequestNumber } = request;
+  const { commitSha, jobId } = request;
   const reviewId = existing.id;
   const claimResult = await claimExistingReview(reviewId, {
     jobId,
-    pullRequestNumber,
+    headSeenAt: request.eventReceivedAt,
     staleBefore: new Date(Date.now() - STALE_PROCESSING_REVIEW_MS),
   });
   if (!claimResult.success) {
@@ -157,7 +161,7 @@ async function claimExistingReviewForRetry(
 
 /**
  * Returns the review to work on: a new PROCESSING review, or an existing
- * review for the same commit claimed for this job (FAILED, abandoned by an
+ * review of the same pull request and commit claimed for this job (FAILED, abandoned by an
  * earlier attempt of this job, or stale). A COMPLETED review, or one another
  * job still owns, means there is nothing to do.
  */
@@ -165,8 +169,9 @@ async function claimReviewRecord(
   repositoryId: RepositoryId,
   request: ReviewRequest,
 ): Promise<Result<ReviewClaimRef, ReviewEngineError>> {
-  const existingResult = await findExistingReviewByCommitSha(
+  const existingResult = await findExistingReviewForPullRequestCommit(
     repositoryId,
+    request.pullRequestNumber,
     request.commitSha,
   );
   if (!existingResult.success) {
@@ -435,6 +440,8 @@ interface LlmAnalysisResult {
   readonly findings: ReviewFinding[];
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
+  /** Files analysed in full: every chunk they were in succeeded. */
+  readonly analyzedFilePaths: readonly string[];
   /** Files of chunks whose analysis failed while the rest succeeded. */
   readonly unanalyzedFilePaths: readonly string[];
   /** Files of chunks whose reply hit the output limit before any finding. */
@@ -509,6 +516,7 @@ async function analyzeAllChunks(
   const unanalyzedFilePaths: string[] = [];
   const outputLimitFilePaths: string[] = [];
   const truncatedFilePaths: string[] = [];
+  const succeededFilePaths: string[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -533,6 +541,7 @@ async function analyzeAllChunks(
     }
 
     allFindings.push(...result.data.findings);
+    succeededFilePaths.push(...chunk.files.map((file) => file.filePath));
     if (result.data.truncated) {
       truncatedFilePaths.push(...chunk.files.map((file) => file.filePath));
     }
@@ -543,10 +552,17 @@ async function analyzeAllChunks(
   if (failedChunkErrors.length === chunks.length) {
     return llmAnalysisFailed(failedChunkErrors);
   }
+  const failedFilePaths = new Set([
+    ...unanalyzedFilePaths,
+    ...outputLimitFilePaths,
+  ]);
   return ok({
     findings: allFindings,
     totalInputTokens,
     totalOutputTokens,
+    analyzedFilePaths: [...new Set(succeededFilePaths)].filter(
+      (filePath) => !failedFilePaths.has(filePath),
+    ),
     unanalyzedFilePaths,
     outputLimitFilePaths,
     truncatedFilePaths,
@@ -756,13 +772,24 @@ async function completeSupersededReview(
   });
 }
 
+/**
+ * What a review counts as reviewed, so the next push review can pick up what
+ * it left out (#129).
+ */
+interface ReviewCoverage {
+  readonly coveredFilePaths: readonly string[];
+  readonly settingsFingerprint: string;
+}
+
 async function saveFindingsOrFailReview(
   claim: ReviewClaimRef,
   summary: string,
   findings: readonly ReviewFinding[],
+  coverage: ReviewCoverage,
 ): Promise<Result<void, StepFailure>> {
   const saveResult = await saveReviewFindings({
     ...claim,
+    ...coverage,
     summary,
     issuesFound: findings.length,
     comments: findings.map((finding) => ({
@@ -799,12 +826,27 @@ async function completeReviewOrFail(
   return ok(processingTimeMs);
 }
 
+/**
+ * Completes a review with nothing to analyse. The diff is the pull request's
+ * current one, so a commit that is no longer the head is superseded rather
+ * than completed with a newer commit's diff (#128).
+ */
 async function completeReviewEarly(
-  claim: ReviewClaimRef,
-  startTime: number,
+  context: ReviewStepsContext,
   summary: string,
+  coverage: ReviewCoverage,
 ): Promise<Result<ReviewEngineResult, StepFailure>> {
-  const saveResult = await saveFindingsOrFailReview(claim, summary, []);
+  const { claim, startTime } = context;
+  const headCheck = await isCommitStillHead(context);
+  if (!headCheck.success) return headCheck;
+  if (!headCheck.data) return completeSupersededReview(claim, startTime);
+
+  const saveResult = await saveFindingsOrFailReview(
+    claim,
+    summary,
+    [],
+    coverage,
+  );
   if (!saveResult.success) return saveResult;
   const completeResult = await completeReviewOrFail(claim, startTime);
   if (!completeResult.success) return completeResult;
@@ -827,10 +869,58 @@ interface ReviewStepsContext {
   readonly startTime: number;
 }
 
+interface FilesToReview {
+  readonly parsedDiff: ParsedDiff;
+  /** Files of the pull request covered before and not reviewed again. */
+  readonly carriedForwardFilePaths: readonly string[];
+  readonly settingsFingerprint: string;
+}
+
+/**
+ * Narrows the pull request's diff to the files this review looks at: the
+ * push-review scope, less the files the exclude patterns keep out.
+ */
+function selectFilesToReview(
+  context: ReviewStepsContext,
+  pullRequestDiff: ParsedDiff,
+): FilesToReview {
+  const settingsFingerprint = fingerprintReviewSettings(context.settings);
+  const scope = selectPushReviewScope(
+    pullRequestDiff.files.map((file) => file.filePath),
+    context.request.pushReviewBase,
+    settingsFingerprint,
+  );
+  const inScope = (filePath: string) => scope === null || scope.has(filePath);
+  const isExcluded = createExcludedPathMatcher(
+    context.settings.excludePatterns,
+  );
+  return {
+    parsedDiff: {
+      files: pullRequestDiff.files.filter(
+        (file) => inScope(file.filePath) && !isExcluded(file.filePath),
+      ),
+    },
+    carriedForwardFilePaths: pullRequestDiff.files
+      .map((file) => file.filePath)
+      .filter((filePath) => !inScope(filePath)),
+    settingsFingerprint,
+  };
+}
+
+function coverageAfterReview(
+  files: FilesToReview,
+  analyzedFilePaths: readonly string[],
+): ReviewCoverage {
+  return {
+    coveredFilePaths: [...files.carriedForwardFilePaths, ...analyzedFilePaths],
+    settingsFingerprint: files.settingsFingerprint,
+  };
+}
+
 async function runReviewSteps(
   context: ReviewStepsContext,
 ): Promise<Result<ReviewEngineResult, StepFailure>> {
-  const { claim, request, owner, repo, githubService, startTime } = context;
+  const { request, owner, repo, githubService } = context;
 
   const diffResult = await fetchAndParseDiff(
     githubService,
@@ -840,23 +930,14 @@ async function runReviewSteps(
   );
   if (!diffResult.success) return diffResult;
 
-  const filterPaths = request.filePathFilter;
-  const isExcluded = createExcludedPathMatcher(
-    context.settings.excludePatterns,
-  );
-  const parsedDiff: ParsedDiff = {
-    files: diffResult.data.files.filter(
-      (f) =>
-        (!filterPaths || filterPaths.includes(f.filePath)) &&
-        !isExcluded(f.filePath),
-    ),
-  };
-
+  const files = selectFilesToReview(context, diffResult.data);
+  const { parsedDiff } = files;
+  const nothingAnalyzed = coverageAfterReview(files, []);
   if (parsedDiff.files.length === 0) {
     return completeReviewEarly(
-      claim,
-      startTime,
+      context,
       "No reviewable files in this PR.",
+      nothingAnalyzed,
     );
   }
 
@@ -873,19 +954,19 @@ async function runReviewSteps(
   );
   if (chunks.length === 0) {
     return completeReviewEarly(
-      claim,
-      startTime,
+      context,
       oversizedNote ?? "No reviewable content after filtering.",
+      nothingAnalyzed,
     );
   }
 
-  return analyzeSaveAndPostReview(context, chunks, parsedDiff, oversizedNote);
+  return analyzeSaveAndPostReview(context, chunks, files, oversizedNote);
 }
 
 async function analyzeSaveAndPostReview(
   context: ReviewStepsContext,
   chunks: readonly ReviewChunk[],
-  parsedDiff: ParsedDiff,
+  files: FilesToReview,
   oversizedNote: string | null,
 ): Promise<Result<ReviewEngineResult, StepFailure>> {
   const { claim, request, llmService, settings, startTime } = context;
@@ -936,7 +1017,7 @@ async function analyzeSaveAndPostReview(
   const review = prepareGitHubReview(
     request.commitSha,
     findings,
-    parsedDiff,
+    files.parsedDiff,
     summary,
   );
 
@@ -944,6 +1025,7 @@ async function analyzeSaveAndPostReview(
     claim,
     summary,
     review.findingsToSave,
+    coverageAfterReview(files, llmResult.data.analyzedFilePaths),
   );
   if (!saveResult.success) return saveResult;
 

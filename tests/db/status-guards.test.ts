@@ -26,6 +26,7 @@ async function claimNewReview(): Promise<ReviewClaimRef> {
     pullRequestNumber: 7,
     commitSha: "abc123",
     claimedByJobId: "job-1",
+    headSeenAt: new Date(),
   });
   if (!created.success || created.data === null) {
     throw new Error("could not create the review");
@@ -38,7 +39,7 @@ async function claimNewReview(): Promise<ReviewClaimRef> {
 async function takeOver(claim: ReviewClaimRef): Promise<ReviewClaimRef> {
   const reclaimed = await claimExistingReview(claim.reviewId, {
     jobId: "job-1",
-    pullRequestNumber: 7,
+    headSeenAt: new Date(),
     staleBefore: new Date(Date.now() - HOUR_MS),
   });
   if (!reclaimed.success || reclaimed.data === null) {
@@ -61,6 +62,8 @@ describe("claim-guarded review updates in Postgres", () => {
         ...oldClaim,
         summary: "stale",
         issuesFound: 1,
+        coveredFilePaths: [],
+        settingsFingerprint: "fingerprint",
         comments: [
           {
             filePath: "src/a.ts",
@@ -304,7 +307,7 @@ describe("review claim renewal guarded by the claim (#114)", () => {
     await failReview(claim, "LLM timeout");
     const retry = await claimExistingReview(claim.reviewId, {
       jobId: "job-2",
-      pullRequestNumber: 7,
+      headSeenAt: new Date(),
       staleBefore: new Date(Date.now() - HOUR_MS),
     });
     if (!retry.success || retry.data === null) throw new Error("no reclaim");

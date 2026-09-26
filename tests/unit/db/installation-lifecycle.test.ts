@@ -46,7 +46,12 @@ describe("installation lifecycle queries", () => {
     expect(upsert?.create).toMatchObject({ status: "ACTIVE" });
     expect(tx.repository.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: { fullName: "acme/new-repo", removedAt: null },
+        update: {
+          fullName: "acme/new-repo",
+          // A job queued before this event cannot write an older name (#127).
+          fullNameSeenAt: expect.any(Date),
+          removedAt: null,
+        },
         where: {
           installationId_githubRepoId: {
             installationId: "inst-1",

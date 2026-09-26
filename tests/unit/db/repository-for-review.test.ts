@@ -6,7 +6,7 @@ const prismaMock = vi.hoisted(() => ({
     findFirst: vi.fn(),
     findUnique: vi.fn(),
     create: vi.fn(),
-    update: vi.fn(),
+    updateMany: vi.fn(),
   },
 }));
 
@@ -22,6 +22,7 @@ const INPUT = {
   githubInstallationId: 12345,
   githubRepoId: 555,
   fullName: "acme/renamed-app",
+  nameSeenAt: new Date("2026-09-01T00:00:00Z"),
 };
 
 function row(overrides: Record<string, unknown> = {}) {
@@ -60,7 +61,7 @@ describe("findOrCreateRepositoryForReview", () => {
     const result = await findOrCreateRepositoryForReview(INPUT);
 
     expect(result).toEqual({ success: true, data: null });
-    expect(prismaMock.repository.update).not.toHaveBeenCalled();
+    expect(prismaMock.repository.updateMany).not.toHaveBeenCalled();
   });
 
   it("never creates a repository under an installation that is not active", async () => {
@@ -98,9 +99,16 @@ describe("findOrCreateRepositoryForReview", () => {
         },
       }),
     );
-    expect(prismaMock.repository.update).toHaveBeenCalledWith({
-      where: { id: "repo-1" },
-      data: { fullName: "acme/renamed-app" },
+    // Only over a name GitHub reported earlier than this job's (#127).
+    expect(prismaMock.repository.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "repo-1",
+        OR: [
+          { fullNameSeenAt: null },
+          { fullNameSeenAt: { lt: INPUT.nameSeenAt } },
+        ],
+      },
+      data: { fullName: "acme/renamed-app", fullNameSeenAt: INPUT.nameSeenAt },
     });
     expect(result).toEqual({
       success: true,
@@ -117,7 +125,7 @@ describe("findOrCreateRepositoryForReview", () => {
 
     expect(result).toEqual({ success: true, data: null });
     expect(prismaMock.repository.create).not.toHaveBeenCalled();
-    expect(prismaMock.repository.update).not.toHaveBeenCalled();
+    expect(prismaMock.repository.updateMany).not.toHaveBeenCalled();
   });
 
   it("creates the row when the repository has none yet", async () => {
@@ -131,6 +139,7 @@ describe("findOrCreateRepositoryForReview", () => {
           installationId: "inst-1",
           githubRepoId: 555,
           fullName: "acme/renamed-app",
+          fullNameSeenAt: INPUT.nameSeenAt,
         },
       }),
     );

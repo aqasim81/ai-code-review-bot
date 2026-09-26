@@ -15,6 +15,7 @@ const INPUT = {
   pullRequestNumber: 42,
   commitSha: "abc123",
   claimedByJobId: "job-1",
+  headSeenAt: new Date("2026-09-01T00:00:00Z"),
 };
 
 function knownRequestError(code: string) {

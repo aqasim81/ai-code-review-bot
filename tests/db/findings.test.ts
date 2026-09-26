@@ -11,6 +11,7 @@ async function claimNewReview(): Promise<ReviewClaimRef> {
     pullRequestNumber: 7,
     commitSha: "abc123",
     claimedByJobId: "job-1",
+    headSeenAt: new Date(),
   });
   if (!created.success || created.data === null) {
     throw new Error("could not create the review");
@@ -44,6 +45,8 @@ async function parseAndSave(
     ...claim,
     summary: "Summary",
     issuesFound: findings.length,
+    coveredFilePaths: [],
+    settingsFingerprint: "fingerprint",
     comments: findings.map((f) => ({
       filePath: f.filePath,
       lineNumber: f.lineNumber,

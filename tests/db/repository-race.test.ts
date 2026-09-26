@@ -33,7 +33,10 @@ describe("creating a repository row for a review in Postgres", () => {
     );
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>
-        findOrCreateRepositoryForReview(NEW_REPOSITORY),
+        findOrCreateRepositoryForReview({
+          ...NEW_REPOSITORY,
+          nameSeenAt: new Date(),
+        }),
       ),
     );
 

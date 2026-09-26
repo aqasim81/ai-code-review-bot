@@ -3,8 +3,9 @@ import {
   claimJobRecord,
   createJobRecord,
   failUnfinishedJobRecord,
-  findLastReviewedCommitSha,
+  findPushReviewBase,
   type JobRecordRun,
+  type PushReviewBaseRecord,
   renewJobRecord,
   updateJobRecord,
 } from "@/lib/db/queries";
@@ -24,7 +25,7 @@ import { exponentialDelayMs } from "@/lib/retry";
 import { executeReview } from "@/lib/review/engine";
 import type { ReviewEngineError } from "@/types/errors";
 import type { GitHubService } from "@/types/github";
-import type { ReviewRequest } from "@/types/review";
+import type { PushReviewBase, ReviewRequest } from "@/types/review";
 
 const DELTA_FILE_THRESHOLD = 50;
 
@@ -254,16 +255,11 @@ async function markJobFailed(
   });
 }
 
-/**
- * Limits a push review to files changed since the last completed review of
- * the pull request. Without one (the earlier review failed or never ran), the
- * whole pull request is reviewed.
- */
-async function buildDeltaFilePathFilter(
+/** The completed review of the pull request's newest reviewed commit. */
+async function findBaseReview(
   payload: ReviewJobPayload,
-  githubService: GitHubService,
-): Promise<readonly string[] | null> {
-  const baseResult = await findLastReviewedCommitSha({
+): Promise<PushReviewBaseRecord | null> {
+  const baseResult = await findPushReviewBase({
     githubInstallationId: payload.installationId,
     githubRepoId: payload.githubRepoId,
     pullRequestNumber: payload.pullRequestNumber,
@@ -285,14 +281,36 @@ async function buildDeltaFilePathFilter(
     );
     return null;
   }
+  return baseResult.data;
+}
+
+/**
+ * The review a push review builds on, with the files changed since. Null
+ * means the whole pull request is reviewed: no review completed, or the
+ * change since cannot be listed.
+ */
+async function buildPushReviewBase(
+  payload: ReviewJobPayload,
+  githubService: GitHubService,
+): Promise<PushReviewBase | null> {
+  const base = await findBaseReview(payload);
+  if (base === null) return null;
   // Already reviewed at this commit; the engine will find that review.
-  if (baseResult.data === payload.commitSha) return [];
-  return fetchChangedFilesForDelta(
-    baseResult.data,
-    payload.commitSha,
-    payload.repositoryFullName,
-    githubService,
-  );
+  const changedFilePaths =
+    base.commitSha === payload.commitSha
+      ? []
+      : await fetchChangedFilesForDelta(
+          base.commitSha,
+          payload.commitSha,
+          payload.repositoryFullName,
+          githubService,
+        );
+  if (changedFilePaths === null) return null;
+  return {
+    changedFilePaths,
+    coveredFilePaths: base.coveredFilePaths,
+    settingsFingerprint: base.settingsFingerprint,
+  };
 }
 
 async function buildReviewRequest(
@@ -309,31 +327,25 @@ async function buildReviewRequest(
     commitSha: payload.commitSha,
     jobId,
     isFinalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
+    // Set when the job was added and kept across retries and delays.
+    eventReceivedAt: new Date(job.timestamp),
   };
 
   if (type !== "review-pr-delta") return baseRequest;
 
-  const filePathFilter = await buildDeltaFilePathFilter(payload, githubService);
-
-  if (filePathFilter === null) {
+  const pushReviewBase = await buildPushReviewBase(payload, githubService);
+  if (pushReviewBase === null) {
     logger.info("Delta review: falling back to full review", {
       jobId: job.id,
     });
     return baseRequest;
   }
 
-  if (filePathFilter.length === 0) {
-    logger.info("Delta review: no files changed since last review", {
-      jobId: job.id,
-    });
-  } else {
-    logger.info("Delta review: filtering to changed files", {
-      jobId: job.id,
-      fileCount: filePathFilter.length,
-    });
-  }
-
-  return { ...baseRequest, filePathFilter };
+  logger.info("Delta review: building on the last reviewed commit", {
+    jobId: job.id,
+    changedFileCount: pushReviewBase.changedFilePaths.length,
+  });
+  return { ...baseRequest, pushReviewBase };
 }
 
 export async function processReviewJob(job: Job<ReviewJobData>): Promise<void> {

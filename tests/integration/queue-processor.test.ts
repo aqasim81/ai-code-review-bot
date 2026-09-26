@@ -10,7 +10,7 @@ import {
   claimJobRecord,
   createJobRecord,
   failUnfinishedJobRecord,
-  findLastReviewedCommitSha,
+  findPushReviewBase,
   renewJobRecord,
   updateJobRecord,
 } from "@/lib/db/queries";
@@ -75,6 +75,12 @@ function createDeltaJob(
   } as unknown as Job<ReviewJobData>;
 }
 
+const BASE_REVIEW = {
+  commitSha: "last-reviewed-sha",
+  coveredFilePaths: ["src/lib/example.ts", "src/lib/other.ts"],
+  settingsFingerprint: "fingerprint",
+};
+
 const NEW_RUN = { id: "db-job-1", runToken: "run-token-1" };
 const CLAIMED_RUN = { id: "existing-db-job", runToken: "run-token-2" };
 
@@ -91,9 +97,7 @@ function setupDefaultMocks() {
   vi.mocked(updateJobRecord).mockResolvedValue(ok(true));
   vi.mocked(renewJobRecord).mockResolvedValue(ok(true));
   vi.mocked(executeReview).mockResolvedValue(ok(createReviewEngineResult()));
-  vi.mocked(findLastReviewedCommitSha).mockResolvedValue(
-    ok("last-reviewed-sha"),
-  );
+  vi.mocked(findPushReviewBase).mockResolvedValue(ok(BASE_REVIEW));
 
   return { mockGithubService, mockLlmService };
 }
@@ -331,7 +335,7 @@ describe("processReviewJob", () => {
     await expect(failure).rejects.not.toBeInstanceOf(UnrecoverableError);
   });
 
-  it("processes delta review job with file path filter", async () => {
+  it("builds a push review on the last reviewed commit and what it covered", async () => {
     vi.mocked(mocks.mockGithubService.compareCommits).mockResolvedValue(
       ok({
         status: "ahead",
@@ -346,7 +350,7 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
-    expect(findLastReviewedCommitSha).toHaveBeenCalledWith({
+    expect(findPushReviewBase).toHaveBeenCalledWith({
       githubInstallationId: 12345,
       githubRepoId: 555,
       pullRequestNumber: 42,
@@ -359,7 +363,11 @@ describe("processReviewJob", () => {
     );
     expect(executeReview).toHaveBeenCalledWith(
       expect.objectContaining({
-        filePathFilter: ["src/changed.ts", "src/also-changed.ts"],
+        pushReviewBase: {
+          changedFilePaths: ["src/changed.ts", "src/also-changed.ts"],
+          coveredFilePaths: BASE_REVIEW.coveredFilePaths,
+          settingsFingerprint: BASE_REVIEW.settingsFingerprint,
+        },
       }),
       expect.anything(),
       expect.anything(),
@@ -367,26 +375,26 @@ describe("processReviewJob", () => {
   });
 
   it("reviews the whole pull request when no earlier review completed", async () => {
-    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(ok(null));
+    vi.mocked(findPushReviewBase).mockResolvedValue(ok(null));
 
     await processReviewJob(createDeltaJob());
 
     expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
     expect(executeReview).toHaveBeenCalledWith(
-      expect.not.objectContaining({ filePathFilter: expect.anything() }),
+      expect.not.objectContaining({ pushReviewBase: expect.anything() }),
       expect.anything(),
       expect.anything(),
     );
   });
 
   it("reviews the whole pull request when the last reviewed commit cannot be looked up", async () => {
-    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(err("DB down"));
+    vi.mocked(findPushReviewBase).mockResolvedValue(err("DB down"));
 
     await processReviewJob(createDeltaJob());
 
     expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
     expect(executeReview).toHaveBeenCalledWith(
-      expect.not.objectContaining({ filePathFilter: expect.anything() }),
+      expect.not.objectContaining({ pushReviewBase: expect.anything() }),
       expect.anything(),
       expect.anything(),
     );
@@ -405,7 +413,7 @@ describe("processReviewJob", () => {
       await processReviewJob(createDeltaJob());
 
       expect(executeReview).toHaveBeenCalledWith(
-        expect.not.objectContaining({ filePathFilter: expect.anything() }),
+        expect.not.objectContaining({ pushReviewBase: expect.anything() }),
         expect.anything(),
         expect.anything(),
       );
@@ -413,13 +421,17 @@ describe("processReviewJob", () => {
   );
 
   it("skips the compare when the head commit was already reviewed", async () => {
-    vi.mocked(findLastReviewedCommitSha).mockResolvedValue(ok("abc123"));
+    vi.mocked(findPushReviewBase).mockResolvedValue(
+      ok({ ...BASE_REVIEW, commitSha: "abc123" }),
+    );
 
     await processReviewJob(createDeltaJob());
 
     expect(mocks.mockGithubService.compareCommits).not.toHaveBeenCalled();
     expect(executeReview).toHaveBeenCalledWith(
-      expect.objectContaining({ filePathFilter: [] }),
+      expect.objectContaining({
+        pushReviewBase: expect.objectContaining({ changedFilePaths: [] }),
+      }),
       expect.anything(),
       expect.anything(),
     );
@@ -434,9 +446,9 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
-    // Falls back to full review (no filePathFilter)
+    // Falls back to full review (no push-review base)
     expect(executeReview).toHaveBeenCalledWith(
-      expect.not.objectContaining({ filePathFilter: expect.anything() }),
+      expect.not.objectContaining({ pushReviewBase: expect.anything() }),
       expect.anything(),
       expect.anything(),
     );
@@ -455,9 +467,9 @@ describe("processReviewJob", () => {
 
     await processReviewJob(job);
 
-    // Falls back to full review (no filePathFilter)
+    // Falls back to full review (no push-review base)
     expect(executeReview).toHaveBeenCalledWith(
-      expect.not.objectContaining({ filePathFilter: expect.anything() }),
+      expect.not.objectContaining({ pushReviewBase: expect.anything() }),
       expect.anything(),
       expect.anything(),
     );
@@ -494,6 +506,20 @@ describe("processReviewJob", () => {
       );
     },
   );
+
+  it("dates the review by when the job was queued, which retries keep (#127, #128)", async () => {
+    const queuedAt = Date.parse("2026-09-01T10:00:00Z");
+
+    await processReviewJob(
+      createMockJob({ timestamp: queuedAt, attemptsMade: 2 }),
+    );
+
+    expect(executeReview).toHaveBeenCalledWith(
+      expect.objectContaining({ eventReceivedAt: new Date(queuedAt) }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 
   it("handles DB job record creation failure gracefully", async () => {
     vi.mocked(createJobRecord).mockResolvedValue(err("DB error"));

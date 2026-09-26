@@ -18,7 +18,7 @@ import {
   claimExistingReview,
   createReviewRecord,
   failReview,
-  findExistingReviewByCommitSha,
+  findExistingReviewForPullRequestCommit,
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
@@ -30,6 +30,7 @@ import { logger } from "@/lib/logger";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
 import { initializeAstParser, parseFileAst } from "@/lib/review/ast-parser";
 import { executeReview } from "@/lib/review/engine";
+import { fingerprintReviewSettings } from "@/lib/review/settings-filter";
 import { err, ok } from "@/types/results";
 import { mergeWithDefaults, type RepositorySettings } from "@/types/settings";
 
@@ -73,7 +74,7 @@ function setupSuccessfulDbMocks() {
     repo: "test-repo",
   });
   useRepositorySettings({});
-  vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(ok(null));
+  vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(ok(null));
   vi.mocked(createReviewRecord).mockResolvedValue(ok(NEW_REVIEW_CLAIM));
   vi.mocked(saveReviewFindings).mockResolvedValue(ok(true));
   vi.mocked(isReviewClaimCurrent).mockResolvedValue(ok(true));
@@ -123,8 +124,9 @@ describe("executeReview — review pipeline", () => {
       githubInstallationId: 12345,
       githubRepoId: 555,
       fullName: "test-owner/test-repo",
+      nameSeenAt: createReviewRequest().eventReceivedAt,
     });
-    expect(findExistingReviewByCommitSha).toHaveBeenCalled();
+    expect(findExistingReviewForPullRequestCommit).toHaveBeenCalled();
     expect(createReviewRecord).toHaveBeenCalled();
     expect(github.fetchPullRequestDiff).toHaveBeenCalledWith(
       "test-owner",
@@ -236,7 +238,7 @@ describe("executeReview — review pipeline", () => {
   });
 
   it("returns REVIEW_ALREADY_EXISTS for a COMPLETED review without claiming it", async () => {
-    vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+    vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
       ok({ id: reviewId("existing-review"), status: "COMPLETED" }),
     );
 
@@ -256,7 +258,7 @@ describe("executeReview — review pipeline", () => {
   it.each(["PROCESSING", "PENDING"] as const)(
     "re-runs a %s review whose claim succeeds (earlier attempt died or went stale)",
     async (status) => {
-      vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+      vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
         ok({ id: reviewId("stuck-review"), status }),
       );
       const github = createMockGitHubService({
@@ -278,7 +280,7 @@ describe("executeReview — review pipeline", () => {
         reviewId("stuck-review"),
         {
           jobId: "job-1",
-          pullRequestNumber: 42,
+          headSeenAt: createReviewRequest().eventReceivedAt,
           staleBefore: expect.any(Date),
         },
       );
@@ -291,7 +293,7 @@ describe("executeReview — review pipeline", () => {
   );
 
   it("returns REVIEW_ALREADY_EXISTS when a PROCESSING review is owned by another live job", async () => {
-    vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+    vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
       ok({ id: reviewId("busy-review"), status: "PROCESSING" }),
     );
     vi.mocked(claimExistingReview).mockResolvedValue(ok(null));
@@ -999,7 +1001,7 @@ describe("executeReview — review pipeline", () => {
   });
 
   it("re-runs a FAILED review for the same commit instead of skipping it", async () => {
-    vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+    vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
       ok({ id: reviewId("failed-review"), status: "FAILED" }),
     );
     const github = createMockGitHubService({
@@ -1021,7 +1023,7 @@ describe("executeReview — review pipeline", () => {
       reviewId("failed-review"),
       {
         jobId: "job-1",
-        pullRequestNumber: 42,
+        headSeenAt: createReviewRequest().eventReceivedAt,
         staleBefore: expect.any(Date),
       },
     );
@@ -1034,7 +1036,7 @@ describe("executeReview — review pipeline", () => {
   });
 
   it("returns REVIEW_ALREADY_EXISTS when another job already reset the FAILED review", async () => {
-    vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+    vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
       ok({ id: reviewId("failed-review"), status: "FAILED" }),
     );
     vi.mocked(claimExistingReview).mockResolvedValue(ok(null));
@@ -1053,7 +1055,7 @@ describe("executeReview — review pipeline", () => {
   });
 
   it("returns REVIEW_DB_ERROR when resetting a FAILED review fails", async () => {
-    vi.mocked(findExistingReviewByCommitSha).mockResolvedValue(
+    vi.mocked(findExistingReviewForPullRequestCommit).mockResolvedValue(
       ok({ id: reviewId("failed-review"), status: "FAILED" }),
     );
     vi.mocked(claimExistingReview).mockResolvedValue(err("DB down"));
@@ -1181,7 +1183,7 @@ describe("executeReview — review pipeline", () => {
     expect(markReviewCompleted).not.toHaveBeenCalled();
   });
 
-  it("filters files by filePathFilter for delta reviews", async () => {
+  it("reviews only the files a push changed when the rest were covered", async () => {
     const multiFileDiff = [
       "diff --git a/src/a.ts b/src/a.ts",
       "--- a/src/a.ts",
@@ -1203,19 +1205,21 @@ describe("executeReview — review pipeline", () => {
     const llm = createMockLlmService();
 
     const request = createReviewRequest({
-      filePathFilter: ["src/a.ts"],
+      pushReviewBase: {
+        changedFilePaths: ["src/a.ts"],
+        coveredFilePaths: ["src/a.ts", "src/b.ts"],
+        settingsFingerprint: fingerprintReviewSettings(mergeWithDefaults({})),
+      },
     });
 
     const result = await executeReview(request, github, llm);
 
     expect(result.success).toBe(true);
-    // LLM should be called (file passes filter), and only src/a.ts should be reviewed
-    if (result.success) {
-      expect(result.data.issuesFound).toBeGreaterThanOrEqual(0);
-    }
+    const [chunk] = vi.mocked(llm.analyzeReviewChunk).mock.calls[0] ?? [];
+    expect(chunk?.files.map((file) => file.filePath)).toEqual(["src/a.ts"]);
   });
 
-  it("completes early when filePathFilter matches no files in diff", async () => {
+  it("completes early when a push changed nothing and everything was covered", async () => {
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi
         .fn()
@@ -1224,7 +1228,11 @@ describe("executeReview — review pipeline", () => {
     const llm = createMockLlmService();
 
     const request = createReviewRequest({
-      filePathFilter: ["src/nonexistent.ts"],
+      pushReviewBase: {
+        changedFilePaths: [],
+        coveredFilePaths: ["src/lib/utils.ts"],
+        settingsFingerprint: fingerprintReviewSettings(mergeWithDefaults({})),
+      },
     });
 
     const result = await executeReview(request, github, llm);
