@@ -248,6 +248,90 @@ describe("createLlmClient", () => {
     expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
   });
 
+  // The model thinks by default and thinking counts toward max_tokens, so a
+  // reply can stop at the limit with thinking and no text (#120).
+  it("reports the output limit, not bad output, when thinking used the whole limit (#120)", async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        { type: "thinking", thinking: "Let me look...", signature: "" },
+      ],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 100, output_tokens: 16_000 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the output limit when a cut-off reply has no complete finding (#120)", async () => {
+    const parser = await import("@/lib/llm/parser");
+    vi.mocked(parser.parseTruncatedLlmReviewResponse).mockReturnValueOnce({
+      success: false,
+      error: "LLM_INVALID_RESPONSE",
+    });
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: '[{"filePath": "src/a.ts"' }],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 100, output_tokens: 16_000 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+  });
+
+  it("reports a refusal without parsing its partial text or retrying (#120)", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "[]" }],
+      stop_reason: "refusal",
+      usage: { input_tokens: 100, output_tokens: 3 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({ success: false, error: "LLM_REFUSED" });
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(parser.parseLlmReviewResponse).not.toHaveBeenCalled();
+    expect(parser.parseTruncatedLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
+  it("reports a refusal that came with no text (#120)", async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [],
+      stop_reason: "refusal",
+      usage: { input_tokens: 100, output_tokens: 0 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({ success: false, error: "LLM_REFUSED" });
+  });
+
   it("turns off the SDK's own retries so a chunk is retried only here", async () => {
     mockSuccessfulResponse();
     const service = createLlmClient({ apiKey: "test-key" });
