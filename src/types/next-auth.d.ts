@@ -29,5 +29,7 @@ declare module "next-auth/jwt" {
     accessFetchedAt?: number;
     accessCheckedAt?: number;
     accessPending?: boolean;
+    /** GitHub rate-limited the user's token until then (ms epoch). */
+    accessRetryNotBefore?: number;
   }
 }

@@ -25,6 +25,9 @@ async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
       fetchedAt: timestampOrZero(token.accessFetchedAt),
       checkedAt: timestampOrZero(token.accessCheckedAt),
       pending: token.accessPending === true,
+      ...(typeof token.accessRetryNotBefore === "number" && {
+        retryNotBefore: token.accessRetryNotBefore,
+      }),
     },
     accessToken: token.accessToken,
     forced,
@@ -43,6 +46,7 @@ async function refreshTokenAccess(token: JWT, forced: boolean): Promise<void> {
   token.accessFetchedAt = state.fetchedAt;
   token.accessCheckedAt = state.checkedAt;
   token.accessPending = state.pending;
+  token.accessRetryNotBefore = state.retryNotBefore;
 }
 
 export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({

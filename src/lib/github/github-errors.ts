@@ -22,6 +22,38 @@ function isRateLimitResponse(error: Error): boolean {
   );
 }
 
+// GitHub asks for at least a minute's wait after a secondary rate limit that
+// names no time.
+const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
+
+function readNumberHeader(
+  headers: Record<string, unknown>,
+  name: string,
+): number | null {
+  const value = Number(headers[name]);
+  return typeof headers[name] === "string" && Number.isFinite(value)
+    ? value
+    : null;
+}
+
+/**
+ * When GitHub allows the next request after a rate limit (ms epoch), per its
+ * rate-limit docs: `retry-after` seconds, else `x-ratelimit-reset` (UTC epoch
+ * seconds) when no requests remain, else at least a minute.
+ */
+export function readRateLimitRetryAt(error: unknown, now: number): number {
+  const headers = error instanceof Error ? readResponseHeaders(error) : {};
+  const retryAfterSeconds = readNumberHeader(headers, "retry-after");
+  if (retryAfterSeconds !== null && retryAfterSeconds > 0) {
+    return now + retryAfterSeconds * 1000;
+  }
+  const resetSeconds = readNumberHeader(headers, "x-ratelimit-reset");
+  if (headers["x-ratelimit-remaining"] === "0" && resetSeconds !== null) {
+    return Math.max(resetSeconds * 1000, now + 1000);
+  }
+  return now + DEFAULT_RATE_LIMIT_WAIT_MS;
+}
+
 export function readResponseStatus(error: unknown): number | null {
   if (!(error instanceof Error) || !("status" in error)) return null;
   const status = (error as Record<string, unknown>).status;

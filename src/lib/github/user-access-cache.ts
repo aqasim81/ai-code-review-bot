@@ -18,6 +18,12 @@ interface CacheEntry {
   readonly fetchedAt: number;
   readonly forced: boolean;
   readonly result: Promise<Result<FetchedAccess, UserAccessFetchError>>;
+  /** A rate-limited result is reused until GitHub allows a retry (#142). */
+  readonly rateLimitedUntil?: number;
+}
+
+function isRateLimitedAt(entry: CacheEntry, now: number): boolean {
+  return entry.rateLimitedUntil !== undefined && now < entry.rateLimitedUntil;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -44,7 +50,12 @@ export async function fetchUserRepositoryAccessShared(
 ): Promise<Result<FetchedAccess, UserAccessFetchError>> {
   const { now, forced } = options;
   for (const [key, entry] of cache) {
-    if (now - entry.fetchedAt >= REGULAR_MAX_AGE_MS) cache.delete(key);
+    if (
+      now - entry.fetchedAt >= REGULAR_MAX_AGE_MS &&
+      !isRateLimitedAt(entry, now)
+    ) {
+      cache.delete(key);
+    }
   }
 
   const key = hashToken(accessToken);
@@ -54,14 +65,17 @@ export async function fetchUserRepositoryAccessShared(
   const reusable = forced
     ? hit?.forced === true && now - hit.fetchedAt < FORCED_MAX_AGE_MS
     : hit !== undefined && now - hit.fetchedAt < REGULAR_MAX_AGE_MS;
-  if (hit && reusable) return hit.result;
+  if (hit && (reusable || isRateLimitedAt(hit, now))) return hit.result;
 
   const result = fetchAndStamp(accessToken, now);
   const entry: CacheEntry = { fetchedAt: now, forced, result };
   cache.set(key, entry);
   const settled = await result;
-  if (!settled.success && settled.error.kind === "retryable") {
-    if (cache.get(key) === entry) cache.delete(key);
+  if (!settled.success && cache.get(key) === entry) {
+    if (settled.error.kind === "retryable") cache.delete(key);
+    if (settled.error.kind === "rate-limited") {
+      cache.set(key, { ...entry, rateLimitedUntil: settled.error.retryAt });
+    }
   }
   return settled;
 }

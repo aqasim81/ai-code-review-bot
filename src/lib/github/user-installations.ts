@@ -1,6 +1,10 @@
 import type { Octokit } from "@octokit/rest";
 import { describeError } from "@/lib/errors";
-import { classifyGitHubError } from "@/lib/github/github-errors";
+import {
+  classifyGitHubError,
+  readRateLimitRetryAt,
+  readResponseStatus,
+} from "@/lib/github/github-errors";
 import { createOctokit } from "@/lib/github/octokit";
 import type { UserAccess, UserAccessFetchError } from "@/types/access";
 import type { Result } from "@/types/results";
@@ -47,17 +51,26 @@ async function listInstallationRepositories(
  * A 404 here means an installation was removed between listing the
  * installations and its repositories; the next lookup no longer lists it.
  * Anything without a known status (a server error, a network error or a
- * timeout, which Octokit reports as 500) may pass on a retry.
+ * timeout, which Octokit reports as 500) may pass on a retry. A 401 means
+ * the user's token expired or was revoked, so they have to sign in again.
  */
-function classifyUserAccessError(error: unknown): UserAccessFetchError["kind"] {
+function classifyUserAccessError(error: unknown): UserAccessFetchError {
+  const message = `Failed to fetch user repository access: ${describeError(error)}`;
+  if (readResponseStatus(error) === 401) {
+    return { kind: "token-rejected", message };
+  }
   switch (classifyGitHubError(error)) {
     case "GITHUB_RATE_LIMITED":
-      return "rate-limited";
+      return {
+        kind: "rate-limited",
+        message,
+        retryAt: readRateLimitRetryAt(error, Date.now()),
+      };
     case "GITHUB_NOT_FOUND":
     case "GITHUB_UNKNOWN_ERROR":
-      return "retryable";
+      return { kind: "retryable", message };
     default:
-      return "permanent";
+      return { kind: "permanent", message };
   }
 }
 
@@ -116,9 +129,6 @@ export async function fetchUserRepositoryAccess(
       truncated,
     });
   } catch (error) {
-    return err({
-      kind: classifyUserAccessError(error),
-      message: `Failed to fetch user repository access: ${describeError(error)}`,
-    });
+    return err(classifyUserAccessError(error));
   }
 }

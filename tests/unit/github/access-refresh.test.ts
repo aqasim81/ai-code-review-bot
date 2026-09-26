@@ -28,9 +28,15 @@ const SERVER_ERROR: UserAccessFetchError = {
   kind: "retryable",
   message: "Bad Gateway",
 };
+const RATE_LIMIT_RESETS_AT = FETCHED_AT + 30 * MINUTE;
 const RATE_LIMITED: UserAccessFetchError = {
   kind: "rate-limited",
   message: "API rate limit exceeded",
+  retryAt: RATE_LIMIT_RESETS_AT,
+};
+const TOKEN_REJECTED: UserAccessFetchError = {
+  kind: "token-rejected",
+  message: "Bad credentials",
 };
 const TOKEN_REVOKED: UserAccessFetchError = {
   kind: "permanent",
@@ -314,5 +320,77 @@ describe("refreshAccessState after a requested refresh fails", () => {
     });
 
     expect((await promise).state.pending).toBe(false);
+  });
+});
+
+// GitHub's rate-limit docs: don't retry before retry-after or
+// x-ratelimit-reset, and "continuing to make requests while you are rate
+// limited may result in the banning of your integration" (#142).
+describe("refreshAccessState during a rate limit (#142)", () => {
+  const LIMITED_STATE: AccessState = {
+    ...stateFetchedAt(FETCHED_AT),
+    pending: true,
+    retryNotBefore: RATE_LIMIT_RESETS_AT,
+  };
+
+  it("records when the rate limit resets", async () => {
+    const { promise } = refreshAt(FETCHED_AT, {
+      forced: true,
+      fetchAccess: fetchFailingWith(RATE_LIMITED),
+    });
+
+    const { state } = await promise;
+    expect(state.retryNotBefore).toBe(RATE_LIMIT_RESETS_AT);
+    expect(state.pending).toBe(true);
+  });
+
+  it.each([false, true])(
+    "does not ask GitHub before the limit resets (forced: %s)",
+    async (forced) => {
+      const { promise, fetchAccess } = refreshAt(FETCHED_AT + 10 * MINUTE, {
+        state: LIMITED_STATE,
+        forced,
+      });
+
+      await promise;
+      expect(fetchAccess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a forced refresh pending while the limit lasts", async () => {
+    const { promise } = refreshAt(FETCHED_AT + MINUTE, {
+      state: { ...LIMITED_STATE, pending: false },
+      forced: true,
+    });
+
+    expect((await promise).state.pending).toBe(true);
+  });
+
+  it("asks GitHub again once the limit has reset and forgets the reset time", async () => {
+    const { promise, fetchAccess } = refreshAt(RATE_LIMIT_RESETS_AT, {
+      state: LIMITED_STATE,
+    });
+
+    const { state } = await promise;
+    expect(fetchAccess).toHaveBeenCalledTimes(1);
+    expect(state.retryNotBefore).toBeUndefined();
+    expect(state.pending).toBe(false);
+  });
+});
+
+// GitHub refuses the user's token (expired or revoked): the user has to sign
+// in again, so retrying is pointless (#130).
+describe("refreshAccessState when GitHub rejects the user's token (#130)", () => {
+  it("does not keep the refresh pending", async () => {
+    const { promise } = refreshAt(FETCHED_AT, {
+      state: { ...stateFetchedAt(0, 0), access: EMPTY_USER_ACCESS },
+      forced: true,
+      fetchAccess: fetchFailingWith(TOKEN_REJECTED),
+    });
+
+    expect(await promise).toMatchObject({
+      state: { pending: false },
+      outcome: { kind: "failed", error: TOKEN_REJECTED },
+    });
   });
 });

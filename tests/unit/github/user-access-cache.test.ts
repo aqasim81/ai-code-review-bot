@@ -138,7 +138,11 @@ describe("fetchUserRepositoryAccessShared", () => {
 
   it("reuses a rate-limited failure so a pending retry does not ask GitHub again", async () => {
     vi.mocked(fetchUserRepositoryAccess).mockResolvedValue(
-      err({ kind: "rate-limited", message: "API rate limit exceeded" }),
+      err({
+        kind: "rate-limited",
+        message: "API rate limit exceeded",
+        retryAt: 60_000,
+      }),
     );
     const { fetchUserRepositoryAccessShared } = await loadFreshCache();
 
@@ -149,5 +153,37 @@ describe("fetchUserRepositoryAccessShared", () => {
     });
 
     expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(1);
+  });
+
+  // A rate-limited user token can't be used until the limit resets, however
+  // often the dashboard asks (#142).
+  it("reuses a rate-limited failure until the limit resets, forced or not", async () => {
+    const limited = {
+      kind: "rate-limited",
+      message: "API rate limit exceeded",
+      retryAt: 120_000,
+    } as const;
+    vi.mocked(fetchUserRepositoryAccess)
+      .mockResolvedValueOnce(err(limited))
+      .mockResolvedValueOnce(ok(ACCESS));
+    const { fetchUserRepositoryAccessShared } = await loadFreshCache();
+
+    await fetchUserRepositoryAccessShared("token", { now: 0, forced: false });
+    for (const [now, forced] of [
+      [40_000, false],
+      [60_000, true],
+      [119_999, true],
+    ] as const) {
+      expect(
+        await fetchUserRepositoryAccessShared("token", { now, forced }),
+      ).toEqual(err(limited));
+    }
+    expect(fetchUserRepositoryAccess).toHaveBeenCalledTimes(1);
+
+    const afterReset = await fetchUserRepositoryAccessShared("token", {
+      now: 120_000,
+      forced: true,
+    });
+    expect(afterReset).toEqual(ok({ access: ACCESS, fetchedAt: 120_000 }));
   });
 });

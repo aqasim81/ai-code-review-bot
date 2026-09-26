@@ -35,9 +35,8 @@ export default async function DashboardLayout({
             role="alert"
             className="mb-6 rounded-md border p-3 text-sm text-destructive"
           >
-            Could not refresh your GitHub access. Retrying in a few seconds;
-            until then, recently added installations or repositories may be
-            missing.
+            Could not refresh your GitHub access. Retrying automatically; until
+            then, recently added installations or repositories may be missing.
           </p>
         )}
         {session.access.truncated && (

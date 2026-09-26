@@ -199,7 +199,7 @@ describe("fetchUserRepositoryAccess", () => {
     [
       "an expired or revoked token",
       githubError("Bad credentials", 401),
-      "permanent",
+      "token-rejected",
     ],
     [
       "a token GitHub refuses for this endpoint",
@@ -215,10 +215,57 @@ describe("fetchUserRepositoryAccess", () => {
 
     expect(result).toEqual({
       success: false,
-      error: { kind, message: expect.stringContaining(failure.message) },
+      error: expect.objectContaining({
+        kind,
+        message: expect.stringContaining(failure.message),
+      }),
     });
   });
+
+  // GitHub's rate-limit docs: wait for retry-after (seconds), else until
+  // x-ratelimit-reset (UTC epoch seconds) when none remain, else at least a
+  // minute (#142).
+  it.each([
+    [
+      "retry-after",
+      githubError("You have exceeded a secondary rate limit", 403, {
+        "retry-after": "120",
+      }),
+      NOW + 120_000,
+    ],
+    [
+      "x-ratelimit-reset",
+      githubError("API rate limit exceeded", 403, {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String((NOW + 30 * 60_000) / 1000),
+      }),
+      NOW + 30 * 60_000,
+    ],
+    [
+      "no header",
+      githubError("You have exceeded a secondary rate limit", 429),
+      NOW + 60_000,
+    ],
+  ] as const)(
+    "keeps when a rate limit resets from %s",
+    async (_case, failure, retryAt) => {
+      vi.useFakeTimers({ now: NOW });
+      github.installations = [{ id: 10 }];
+      github.failInstallationId = 10;
+      github.failure = failure;
+
+      const result = await fetchUserRepositoryAccess("user-token");
+      vi.useRealTimers();
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.objectContaining({ kind: "rate-limited", retryAt }),
+      });
+    },
+  );
 });
+
+const NOW = 1_700_000_000_000;
 
 function githubError(
   message: string,
