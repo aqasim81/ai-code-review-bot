@@ -15,13 +15,16 @@ changed since its base, so files the base left unreviewed stayed unreviewed (#12
 ## Decision
 
 - A review is unique on `(repositoryId, pullRequestNumber, commitSha)`.
-- The event time is `job.timestamp`: when the job was added, kept across retries and delays.
-  The processor passes it as `ReviewRequest.eventReceivedAt`.
+- The event time is the pull request's `updated_at` from the webhook payload, carried in the
+  job payload as `eventAt` and passed to the engine as `ReviewRequest.eventAt`. Retries, delays
+  and redeliveries keep it. A job queued before the payload carried it falls back to
+  `job.timestamp` (when it was added). `job.timestamp` alone is not enough: a redelivered old
+  event is queued late and would pass for a newer one.
 - `reviews.headSeenAt` stores it (set on create and on claim). `findPushReviewBase` returns the
   COMPLETED review with the latest `headSeenAt`.
 - `repositories.fullNameSeenAt` stores when GitHub reported the name. A write of the name is a
   guarded update that applies only over an older report.
-- A review stores `coveredFilePaths` (the PR's files counted as reviewed at its commit) and a
+- A review stores `coveredFilePaths` (the PR's files counted as reviewed at its commit; a file of a failed or cut-off reply is not) and a
   `settingsFingerprint` (categories, minimum severity, custom instructions). A push review looks
   at files changed since the base plus the PR's files the base did not cover. A different
   fingerprint means a full review.
