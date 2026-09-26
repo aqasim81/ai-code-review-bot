@@ -404,6 +404,43 @@ describe("createLlmClient", () => {
       expect((await resultPromise).success).toBe(true);
     });
 
+    it.each([
+      ["a retry-after of zero", { "retry-after": "0" }],
+      ["a retry-after-ms of zero", { "retry-after-ms": "0" }],
+      ["a negative retry-after", { "retry-after": "-5" }],
+      [
+        "a retry-after date already past",
+        { "retry-after": "Wed, 31 Dec 2025 23:59:58 GMT" },
+      ],
+    ])("keeps the short backoff for %s", async (_label, headers) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      rateLimitedThenOk(new MockRateLimitError(headers));
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
+    it("reads retry-after when retry-after-ms is zero", async () => {
+      vi.useFakeTimers();
+      rateLimitedThenOk(
+        new MockRateLimitError({ "retry-after-ms": "0", "retry-after": "5" }),
+      );
+
+      const resultPromise = analyze();
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect((await resultPromise).success).toBe(true);
+    });
+
     it("keeps the short backoff when there is no retry-after header", async () => {
       vi.useFakeTimers();
       rateLimitedThenOk(new MockRateLimitError());
