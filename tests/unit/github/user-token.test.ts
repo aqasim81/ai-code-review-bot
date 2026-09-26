@@ -205,6 +205,46 @@ describe("refreshUserTokensShared (#130)", () => {
     });
   });
 
+  // Only GitHub's OAuth error field says the refresh token is refused; a
+  // rate limit or any other failure must not end the session (#130).
+  it.each([
+    [
+      "a secondary rate limit",
+      () =>
+        jsonResponse(
+          { message: "You have exceeded a secondary rate limit" },
+          403,
+        ),
+    ],
+    ["an unexpected answer", () => new Response("<html>", { status: 400 })],
+  ])("does not treat %s as a rejected token", async (_label, response) => {
+    fetchMock.mockResolvedValue(response());
+    const { refreshUserTokensShared } = await loadFresh();
+
+    const result = await refreshUserTokensShared("ghr_old", NOW);
+
+    expect(result.success).toBe(false);
+    expect(result.success || result.error.kind).not.toBe("token-rejected");
+  });
+
+  it("waits for a rate limit on the token endpoint to reset before asking again", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response("{}", { status: 429, headers: { "retry-after": "120" } }),
+      )
+      .mockResolvedValue(jsonResponse(GRANTED));
+    const { refreshUserTokensShared } = await loadFresh();
+
+    await refreshUserTokensShared("ghr_old", NOW);
+    const during = await refreshUserTokensShared("ghr_old", NOW + 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(during.success).toBe(false);
+
+    const after = await refreshUserTokensShared("ghr_old", NOW + 120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(after.success).toBe(true);
+  });
+
   it.each([
     [
       "a server error",
