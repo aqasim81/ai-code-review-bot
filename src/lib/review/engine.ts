@@ -279,12 +279,15 @@ const REJECTED_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
   "LLM_AUTH_FAILED",
   "LLM_BAD_REQUEST",
   "LLM_CONTEXT_TOO_LONG",
+  "LLM_SPEND_LIMIT_REACHED",
 ]);
 
-// Rejections that fail every chunk alike, so there is no point going on.
-const CREDENTIAL_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
+// Rejections of the account (credentials, spend cap) that fail every chunk
+// alike, so there is no point going on.
+const ACCOUNT_LLM_ERRORS: ReadonlySet<LLMError> = new Set([
   "LLM_API_KEY_MISSING",
   "LLM_AUTH_FAILED",
+  "LLM_SPEND_LIMIT_REACHED",
 ]);
 
 async function fetchAndParseDiff(
@@ -456,27 +459,36 @@ function describeFindingCount(findingCount: number): string {
   return `Found ${findingCount} issue${findingCount === 1 ? "" : "s"} in this review.`;
 }
 
+/**
+ * A rate limit is reported apart from other failures, so the queue waits for
+ * the limit to refill before retrying rather than retrying within seconds.
+ */
+function reviewErrorForLlmFailures(
+  errors: readonly LLMError[],
+): Exclude<ReviewEngineError, "REVIEW_CLAIM_LOST"> {
+  if (errors.every((error) => REJECTED_LLM_ERRORS.has(error))) {
+    return "REVIEW_LLM_REJECTED";
+  }
+  if (errors.includes("LLM_RATE_LIMITED")) return "REVIEW_LLM_RATE_LIMITED";
+  return "REVIEW_LLM_FAILED";
+}
+
 function llmAnalysisFailed(
   errors: readonly LLMError[],
 ): Result<never, StepFailure> {
-  return stepFailed(
-    errors.every((error) => REJECTED_LLM_ERRORS.has(error))
-      ? "REVIEW_LLM_REJECTED"
-      : "REVIEW_LLM_FAILED",
-    "LLM analysis failed",
-  );
+  return stepFailed(reviewErrorForLlmFailures(errors), "LLM analysis failed");
 }
 
 /**
  * Whether the review should stop at a failed chunk rather than go on without
- * it: the credentials are bad (every chunk fails alike), or a retry of the
+ * it: the account is refused (every chunk fails alike), or a retry of the
  * whole job may still succeed.
  */
 function shouldStopAtFailedChunk(
   error: LLMError,
   isFinalAttempt: boolean,
 ): boolean {
-  if (CREDENTIAL_LLM_ERRORS.has(error)) return true;
+  if (ACCOUNT_LLM_ERRORS.has(error)) return true;
   return !REJECTED_LLM_ERRORS.has(error) && !isFinalAttempt;
 }
 

@@ -19,6 +19,10 @@ const DEFAULT_MAX_RETRIES = 3;
 // limit for requests that are not streamed.
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
 const BASE_RETRY_DELAY_MS = 1000;
+// The SDK's own retry follows retry-after only up to a minute (retryRequest in
+// the SDK's client.js). A longer wait is left to the job's rate-limit backoff
+// rather than holding the worker.
+const MAX_RETRY_AFTER_MS = 60_000;
 
 interface LlmClientOptions {
   readonly apiKey?: string;
@@ -102,6 +106,19 @@ interface LlmRawResponse {
   readonly truncated: boolean;
 }
 
+interface LlmCallFailure {
+  readonly error: LLMError;
+  /** How long the API asked to wait before a retry, when it said. */
+  readonly retryAfterMs: number | null;
+}
+
+function canRetryLlmCall(failure: LlmCallFailure): boolean {
+  if (!isRetryableError(failure.error)) return false;
+  return (
+    failure.retryAfterMs === null || failure.retryAfterMs <= MAX_RETRY_AFTER_MS
+  );
+}
+
 async function callWithRetry(
   client: LlmSdk,
   modelId: string,
@@ -110,11 +127,17 @@ async function callWithRetry(
   userMessage: string,
   maxRetries: number,
 ): Promise<Result<LlmRawResponse, LLMError>> {
-  let lastError: LLMError = "LLM_UNKNOWN_ERROR";
+  let lastFailure: LlmCallFailure = {
+    error: "LLM_UNKNOWN_ERROR",
+    retryAfterMs: null,
+  };
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
-      const delayMs = exponentialDelayMs(BASE_RETRY_DELAY_MS, 3, attempt);
+      // Retrying before retry-after has passed fails again (rate-limit docs).
+      const delayMs =
+        lastFailure.retryAfterMs ??
+        exponentialDelayMs(BASE_RETRY_DELAY_MS, 3, attempt);
       logger.info("Retrying LLM call", { attempt, delayMs });
       await sleep(delayMs);
     }
@@ -131,18 +154,19 @@ async function callWithRetry(
       return result;
     }
 
-    lastError = result.error;
-    if (!isRetryableError(lastError)) {
-      return result;
+    lastFailure = result.error;
+    if (!canRetryLlmCall(lastFailure)) {
+      return err(lastFailure.error);
     }
 
     logger.warn("LLM call failed, will retry", {
       attempt,
-      error: lastError,
+      error: lastFailure.error,
+      retryAfterMs: lastFailure.retryAfterMs,
     });
   }
 
-  return err(lastError);
+  return err(lastFailure.error);
 }
 
 async function executeSingleLlmCall(
@@ -151,7 +175,7 @@ async function executeSingleLlmCall(
   maxOutputTokens: number,
   system: string,
   userMessage: string,
-): Promise<Result<LlmRawResponse, LLMError>> {
+): Promise<Result<LlmRawResponse, LlmCallFailure>> {
   try {
     const response = await client.messages.create({
       model: modelId,
@@ -162,7 +186,7 @@ async function executeSingleLlmCall(
 
     const textBlock = response.content.find((block) => block.type === "text");
     if (textBlock === undefined || textBlock.type !== "text") {
-      return err("LLM_INVALID_RESPONSE");
+      return err({ error: "LLM_INVALID_RESPONSE", retryAfterMs: null });
     }
 
     logger.info("LLM call completed", {
@@ -178,13 +202,63 @@ async function executeSingleLlmCall(
       truncated: response.stop_reason === "max_tokens",
     });
   } catch (error: unknown) {
-    return err(mapSdkError(error));
+    return err({
+      error: mapSdkError(error),
+      retryAfterMs: readRetryAfterMs(error),
+    });
   }
+}
+
+function readResponseHeader(error: unknown, name: string): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const headers = (error as { headers?: unknown }).headers;
+  return headers instanceof Headers ? headers.get(name) : null;
+}
+
+/**
+ * Reads how long the API asked to wait, as the SDK's own retry does:
+ * retry-after-ms first, then retry-after in seconds or as an HTTP date.
+ */
+function readRetryAfterMs(error: unknown): number | null {
+  const millis = Number.parseFloat(
+    readResponseHeader(error, "retry-after-ms") ?? "",
+  );
+  if (!Number.isNaN(millis)) return Math.max(0, millis);
+
+  const retryAfter = readResponseHeader(error, "retry-after");
+  if (retryAfter === null) return null;
+  const seconds = Number.parseFloat(retryAfter);
+  if (!Number.isNaN(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(retryAfter);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
+/**
+ * A 429 also answers a request past the organisation's monthly spend cap. It
+ * has no retry-after and every retry fails until the cap is raised or the
+ * month ends; the error body names it (rate-limit docs, "Reaching your spend
+ * cap"). The SDK keeps the parsed body on the error.
+ */
+function isSpendLimitReached(
+  error: InstanceType<typeof LlmSdk.RateLimitError>,
+): boolean {
+  const body: unknown = error.error;
+  if (typeof body !== "object" || body === null) return false;
+  const inner: unknown = (body as { error?: unknown }).error;
+  if (typeof inner !== "object" || inner === null) return false;
+  const details: unknown = (inner as { details?: unknown }).details;
+  if (typeof details !== "object" || details === null) return false;
+  return (
+    (details as { error_code?: unknown }).error_code ===
+    "enforced_spend_limit_reached"
+  );
 }
 
 function mapSdkError(error: unknown): LLMError {
   if (error instanceof LlmSdk.RateLimitError) {
-    return "LLM_RATE_LIMITED";
+    return isSpendLimitReached(error)
+      ? "LLM_SPEND_LIMIT_REACHED"
+      : "LLM_RATE_LIMITED";
   }
   if (error instanceof LlmSdk.APIConnectionTimeoutError) {
     return "LLM_TIMEOUT";
