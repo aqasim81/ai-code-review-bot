@@ -319,6 +319,7 @@ describe("processReviewJob", () => {
 
   it.each([
     "REVIEW_GITHUB_RATE_LIMITED",
+    "REVIEW_LLM_RATE_LIMITED",
     "REVIEW_LLM_FAILED",
     "REVIEW_DIFF_FETCH_FAILED",
   ] as const)("leaves %s retryable", async (code) => {
@@ -620,10 +621,13 @@ describe("calculateBackoffDelay", () => {
   });
 });
 
-describe("calculateBackoffDelay for a GitHub rate limit", () => {
+describe("calculateBackoffDelay for a rate limit", () => {
   // The backoff strategy receives the error processReviewJob threw.
   async function errorThrownFor(
-    code: "REVIEW_GITHUB_RATE_LIMITED" | "REVIEW_LLM_FAILED",
+    code:
+      | "REVIEW_GITHUB_RATE_LIMITED"
+      | "REVIEW_LLM_RATE_LIMITED"
+      | "REVIEW_LLM_FAILED",
   ): Promise<Error> {
     vi.clearAllMocks();
     setupDefaultMocks();
@@ -639,6 +643,13 @@ describe("calculateBackoffDelay for a GitHub rate limit", () => {
 
     expect(calculateBackoffDelay(1, rateLimited)).toBe(30 * 60_000);
     expect(calculateBackoffDelay(2, rateLimited)).toBe(30 * 60_000);
+  });
+
+  it("waits 5 minutes before each retry after a model rate limit", async () => {
+    const rateLimited = await errorThrownFor("REVIEW_LLM_RATE_LIMITED");
+
+    expect(calculateBackoffDelay(1, rateLimited)).toBe(5 * 60_000);
+    expect(calculateBackoffDelay(2, rateLimited)).toBe(5 * 60_000);
   });
 
   it("keeps the short backoff for other failures", async () => {

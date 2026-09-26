@@ -43,9 +43,28 @@ const UNRECOVERABLE_REVIEW_ERRORS: ReadonlySet<ReviewEngineError> = new Set([
   "REVIEW_POST_REJECTED",
 ]);
 
+// GitHub's primary rate limit resets hourly; two 30-minute waits between the
+// three attempts span a full window.
+const GITHUB_RATE_LIMIT_RETRY_DELAY_MS = 30 * 60_000;
+// The model's limits are per minute and refill continuously. The client has
+// already waited what retry-after asked (up to a minute) before giving up, so
+// the limit is held by sustained load; wait several windows.
+const LLM_RATE_LIMIT_RETRY_DELAY_MS = 5 * 60_000;
+
 // Names the error thrown for a rate-limited review, so the backoff strategy,
-// which receives that error, can wait for the limit to reset.
-const GITHUB_RATE_LIMITED_ERROR_NAME = "GitHubRateLimitedReviewError";
+// which receives that error, can wait for the limit to refill.
+const RATE_LIMITED_REVIEW_ERRORS: Partial<
+  Record<ReviewEngineError, { errorName: string; retryDelayMs: number }>
+> = {
+  REVIEW_GITHUB_RATE_LIMITED: {
+    errorName: "GitHubRateLimitedReviewError",
+    retryDelayMs: GITHUB_RATE_LIMIT_RETRY_DELAY_MS,
+  },
+  REVIEW_LLM_RATE_LIMITED: {
+    errorName: "LlmRateLimitedReviewError",
+    retryDelayMs: LLM_RATE_LIMIT_RETRY_DELAY_MS,
+  },
+};
 
 async function fetchChangedFilesForDelta(
   baseCommitSha: string,
@@ -389,25 +408,21 @@ async function runReviewForJob(
   if (UNRECOVERABLE_REVIEW_ERRORS.has(result.error)) {
     throw new UnrecoverableError(message);
   }
-  if (result.error === "REVIEW_GITHUB_RATE_LIMITED") {
-    throw Object.assign(new Error(message), {
-      name: GITHUB_RATE_LIMITED_ERROR_NAME,
-    });
+  const rateLimited = RATE_LIMITED_REVIEW_ERRORS[result.error];
+  if (rateLimited !== undefined) {
+    throw Object.assign(new Error(message), { name: rateLimited.errorName });
   }
   throw new Error(message);
 }
-
-// GitHub's primary rate limit resets hourly; two 30-minute waits between the
-// three attempts span a full window.
-const GITHUB_RATE_LIMIT_RETRY_DELAY_MS = 30 * 60_000;
 
 export function calculateBackoffDelay(
   attemptsMade: number,
   error?: Error,
 ): number {
-  if (error?.name === GITHUB_RATE_LIMITED_ERROR_NAME) {
-    return GITHUB_RATE_LIMIT_RETRY_DELAY_MS;
-  }
+  const rateLimited = Object.values(RATE_LIMITED_REVIEW_ERRORS).find(
+    (entry) => entry.errorName === error?.name,
+  );
+  if (rateLimited !== undefined) return rateLimited.retryDelayMs;
   return exponentialDelayMs(10_000, 3, attemptsMade);
 }
 
