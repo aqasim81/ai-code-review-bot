@@ -41,11 +41,17 @@ interface Reply {
 // the offset just past each item's closing brace.
 const replyArbitrary: fc.Arbitrary<Reply> = fc
   .record({
-    prose: fc.constantFrom("", "Here are the findings:\n", "```json\n"),
+    prose: fc.constantFrom(
+      "",
+      "Here are the findings:\n",
+      "```json\n",
+      "Looking at `items[0]` and [src/a.ts]:\n",
+    ),
     separator: fc.constantFrom(",", ", ", ",\n  "),
     items: fc.array(findingArbitrary, { maxLength: 5 }),
+    trailer: fc.constantFrom("", "\n\nThat is all.", "\n```", "\nSee [docs]."),
   })
-  .map(({ prose, separator, items }) => {
+  .map(({ prose, separator, items, trailer }) => {
     let text = `${prose}[`;
     const itemEnds: number[] = [];
     items.forEach((item, index) => {
@@ -53,7 +59,7 @@ const replyArbitrary: fc.Arbitrary<Reply> = fc
       text += JSON.stringify(item);
       itemEnds.push(text.length);
     });
-    return { text: `${text}]`, itemEnds };
+    return { text: `${text}]${trailer}`, itemEnds };
   })
   .filter(({ itemEnds }) => itemEnds.length > 0);
 

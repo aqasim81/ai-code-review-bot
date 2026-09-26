@@ -231,6 +231,47 @@ describe("parseLlmReviewResponse", () => {
   });
 });
 
+describe("parseLlmReviewResponse — where the findings are in the reply (#121)", () => {
+  const finding = JSON.stringify({
+    filePath: "src/a.ts",
+    lineNumber: 3,
+    category: "BUGS",
+    severity: "WARNING",
+    message: "Found [one] issue",
+    suggestion: "Fix it.",
+    confidence: 0.9,
+  });
+
+  it.each([
+    ["prose after the array", `[${finding}]\n\nThat is all.`],
+    [
+      "a code fence before the fenced findings",
+      `Context:\n\`\`\`ts\nconst x = items[0];\n\`\`\`\nFindings:\n\`\`\`json\n[${finding}]\n\`\`\``,
+    ],
+    [
+      "brackets in the preamble",
+      `Looking at \`items[0]\` and [src/a.ts]:\n[${finding}]`,
+    ],
+    [
+      "brackets before and prose after",
+      `See [src/a.ts]:\n[${finding}]\nSee also [docs].`,
+    ],
+  ])("finds the findings with %s", (_label, text) => {
+    const result = parseLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
+  });
+
+  it("still returns an empty array for a reply of [] after prose", () => {
+    expect(parseLlmReviewResponse("No issues [none]:\n[]")).toEqual({
+      success: true,
+      data: [],
+    });
+  });
+});
+
 describe("parseTruncatedLlmReviewResponse", () => {
   const complete = (message: string) =>
     JSON.stringify({
@@ -273,6 +314,25 @@ describe("parseTruncatedLlmReviewResponse", () => {
     expect(result).toEqual({ success: true, data: [] });
   });
 
+  // A "[" in the prose before the findings is not where they start (#121).
+  it("skips brackets in the prose before the findings", () => {
+    const text = `Looking at \`items[0]\` and [src/a.ts]:\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("returns LLM_OUTPUT_LIMIT_REACHED when only the prose holds brackets", () => {
+    expect(
+      parseTruncatedLlmReviewResponse(
+        'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts", "message": "cut',
+      ),
+    ).toEqual({ success: false, error: "LLM_OUTPUT_LIMIT_REACHED" });
+  });
+
   // The limit cut the reply before anything could be kept (#120).
   it.each([
     ["no complete finding", '[{"filePath": "src/a.ts", "message": "cut'],
@@ -289,7 +349,7 @@ describe("parseTruncatedLlmReviewResponse", () => {
   it.each([
     [
       "an array that closed before the cut but is not JSON",
-      'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts", "message": "cut',
+      '[{"filePath": src/a.ts}] That is all, and then',
     ],
     [
       "a complete item that is not JSON",
