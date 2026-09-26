@@ -282,7 +282,7 @@ describe("createLlmClient", () => {
     ],
     [
       "an array that closed before the cut but is not JSON",
-      'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts"',
+      '[{"filePath": src/a.ts}] That is all, and then',
       "LLM_INVALID_RESPONSE",
     ],
     [

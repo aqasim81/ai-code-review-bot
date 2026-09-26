@@ -26,23 +26,11 @@ export function parseLlmReviewResponse(
 ): Result<readonly ReviewFinding[], LLMError> {
   const threshold = confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
 
-  const jsonString = extractJsonFromResponse(responseText);
-  if (jsonString === null) {
+  const items = extractFindingsArray(responseText);
+  if (items === null) {
     return err("LLM_INVALID_RESPONSE");
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonString);
-  } catch {
-    return err("LLM_INVALID_RESPONSE");
-  }
-
-  if (!Array.isArray(parsed)) {
-    return err("LLM_INVALID_RESPONSE");
-  }
-
-  return ok(validateFindings(parsed, threshold));
+  return ok(validateFindings(items, threshold));
 }
 
 /**
@@ -55,16 +43,35 @@ export function parseTruncatedLlmReviewResponse(
   responseText: string,
   confidenceThreshold?: number,
 ): Result<readonly ReviewFinding[], LLMError> {
-  const arrayStart = responseText.indexOf("[");
-  if (arrayStart === -1) {
-    return err("LLM_OUTPUT_LIMIT_REACHED");
+  let repairedAny = false;
+  for (const arrayStart of findingsArrayStarts(responseText)) {
+    const repaired = closeAfterCompleteItems(responseText, arrayStart);
+    if (repaired === null) continue;
+    repairedAny = true;
+    const parsed = parseJsonArray(repaired);
+    if (parsed !== null) {
+      return ok(
+        validateFindings(
+          parsed,
+          confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
+        ),
+      );
+    }
   }
+  if (repairedAny) return err("LLM_INVALID_RESPONSE");
 
-  const repaired = closeAfterCompleteItems(responseText, arrayStart);
-  if (repaired === null) {
-    return err("LLM_OUTPUT_LIMIT_REACHED");
-  }
-  return parseLlmReviewResponse(repaired, confidenceThreshold);
+  // No finding was complete; the reply may still hold a whole empty array.
+  const whole = parseLlmReviewResponse(responseText, confidenceThreshold);
+  return whole.success ? whole : err("LLM_OUTPUT_LIMIT_REACHED");
+}
+
+/**
+ * Offsets of each "[" that can start the findings array: one followed, after
+ * whitespace, by "{" or "]". A "[" in the prose (`items[0]`, `[src/a.ts]`) is
+ * never one (#121).
+ */
+function findingsArrayStarts(text: string): number[] {
+  return [...text.matchAll(/\[(?=\s*[{\]])/g)].map((match) => match.index);
 }
 
 /**
@@ -76,6 +83,19 @@ function closeAfterCompleteItems(
   text: string,
   arrayStart: number,
 ): string | null {
+  const scan = scanArray(text, arrayStart);
+  if (scan.closedAt !== null) return text.slice(arrayStart, scan.closedAt + 1);
+  return scan.lastItemEnd === null
+    ? null
+    : `${text.slice(arrayStart, scan.lastItemEnd + 1)}]`;
+}
+
+interface ArrayScan {
+  readonly closedAt: number | null;
+  readonly lastItemEnd: number | null;
+}
+
+function scanArray(text: string, arrayStart: number): ArrayScan {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -93,14 +113,11 @@ function closeAfterCompleteItems(
     else if (char === "{" || char === "[") depth++;
     else if (char === "}" || char === "]") {
       depth--;
-      if (depth === 0) return text.slice(arrayStart, i + 1);
+      if (depth === 0) return { closedAt: i, lastItemEnd };
       if (depth === 1) lastItemEnd = i;
     }
   }
-
-  return lastItemEnd === null
-    ? null
-    : `${text.slice(arrayStart, lastItemEnd + 1)}]`;
+  return { closedAt: null, lastItemEnd };
 }
 
 function validateFindings(
@@ -124,31 +141,40 @@ function validateFindings(
   return findings;
 }
 
-function extractJsonFromResponse(text: string): string | null {
-  const trimmed = text.trim();
+const CODE_FENCE_PATTERN = /```(?:json)?[^\S\n]*\n?([\s\S]*?)\n?\s*```/g;
 
-  // Try direct parse first — response might already be valid JSON
-  if (trimmed.startsWith("[")) {
-    return trimmed;
+/**
+ * Finds the findings array in a reply: the whole reply, then each code fence,
+ * then each closed array in the text. The first that parses as a JSON array
+ * wins, so prose before or after it and other fences don't matter (#121).
+ */
+function extractFindingsArray(text: string): unknown[] | null {
+  for (const candidate of candidateArrayTexts(text.trim())) {
+    const parsed = parseJsonArray(candidate);
+    if (parsed !== null) return parsed;
   }
-
-  // Strip markdown code fences
-  const fenceMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch?.[1] !== undefined) {
-    const inner = fenceMatch[1].trim();
-    if (inner.startsWith("[")) {
-      return inner;
-    }
-  }
-
-  // Find first [ ... ] block in the text
-  const bracketStart = trimmed.indexOf("[");
-  const bracketEnd = trimmed.lastIndexOf("]");
-  if (bracketStart !== -1 && bracketEnd > bracketStart) {
-    return trimmed.slice(bracketStart, bracketEnd + 1);
-  }
-
   return null;
+}
+
+function candidateArrayTexts(text: string): string[] {
+  const fenced = [...text.matchAll(CODE_FENCE_PATTERN)].map((match) =>
+    (match[1] ?? "").trim(),
+  );
+  const closedArrays = findingsArrayStarts(text).flatMap((arrayStart) => {
+    const closedAt = scanArray(text, arrayStart).closedAt;
+    return closedAt === null ? [] : [text.slice(arrayStart, closedAt + 1)];
+  });
+  return [text, ...fenced, ...closedArrays];
+}
+
+function parseJsonArray(text: string): unknown[] | null {
+  if (!text.startsWith("[")) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 // Line numbers are stored in a Postgres integer column, so a finding with a
