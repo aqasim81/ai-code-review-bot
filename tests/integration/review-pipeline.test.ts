@@ -6,6 +6,7 @@ import {
   createReviewFinding,
   createReviewRequest,
   createReviewResult,
+  createReviewResultForChunk,
   repositoryId,
   reviewId,
 } from "../helpers/factories";
@@ -588,7 +589,10 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const criticalFinding = createReviewFinding({ severity: "CRITICAL" });
+    const criticalFinding = createReviewFinding({
+      filePath: "src/lib/utils.ts",
+      severity: "CRITICAL",
+    });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -616,7 +620,10 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const warningFinding = createReviewFinding({ severity: "WARNING" });
+    const warningFinding = createReviewFinding({
+      filePath: "src/lib/utils.ts",
+      severity: "WARNING",
+    });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -820,7 +827,7 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const finding = createReviewFinding();
+    const finding = createReviewFinding({ filePath: "src/lib/utils.ts" });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -1288,9 +1295,13 @@ describe("executeReview — a chunk whose analysis fails", () => {
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
-        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockImplementationOnce(async (chunk) =>
+          ok(createReviewResultForChunk(chunk)),
+        )
         .mockResolvedValueOnce(err("LLM_CONTEXT_TOO_LONG"))
-        .mockResolvedValueOnce(ok(createReviewResult())),
+        .mockImplementationOnce(async (chunk) =>
+          ok(createReviewResultForChunk(chunk)),
+        ),
     });
 
     const result = await executeReview(createReviewRequest(), github, llm);
@@ -1674,11 +1685,24 @@ describe("executeReview — repository settings", () => {
       minimumSeverity: "WARNING",
       enabledCategories: ["BUGS", "SECURITY"],
     });
-    const kept = createReviewFinding({ category: "BUGS", severity: "WARNING" });
+    const onReviewedFile = { filePath: "src/lib/utils.ts" };
+    const kept = createReviewFinding({
+      ...onReviewedFile,
+      category: "BUGS",
+      severity: "WARNING",
+    });
     const llm = llmReturning([
       kept,
-      createReviewFinding({ category: "BUGS", severity: "SUGGESTION" }),
-      createReviewFinding({ category: "STYLE", severity: "CRITICAL" }),
+      createReviewFinding({
+        ...onReviewedFile,
+        category: "BUGS",
+        severity: "SUGGESTION",
+      }),
+      createReviewFinding({
+        ...onReviewedFile,
+        category: "STYLE",
+        severity: "CRITICAL",
+      }),
     ]);
 
     const result = await executeReview(

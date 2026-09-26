@@ -505,6 +505,35 @@ function shouldStopAtFailedChunk(
   return !REJECTED_LLM_ERRORS.has(error) && !isFinalAttempt;
 }
 
+/**
+ * The chunk's findings on files the model was sent. A file is never split
+ * across chunks, so a finding on any other path is on code the model never
+ * saw, even when that file is in another chunk of the pull request (#123).
+ */
+function keepFindingsOnChunkFiles(
+  findings: readonly ReviewFinding[],
+  chunk: ReviewChunk,
+): ReviewFinding[] {
+  const chunkFilePaths = new Set(chunk.files.map((file) => file.filePath));
+  const kept = findings.filter((finding) =>
+    chunkFilePaths.has(finding.filePath),
+  );
+  if (kept.length < findings.length) {
+    logger.warn("Dropping findings on files the model was not sent", {
+      droppedCount: findings.length - kept.length,
+      // Paths come from the model, so only a few are logged.
+      droppedFilePaths: [
+        ...new Set(
+          findings
+            .filter((finding) => !chunkFilePaths.has(finding.filePath))
+            .map((finding) => finding.filePath),
+        ),
+      ].slice(0, MAX_LISTED_FILES),
+    });
+  }
+  return kept;
+}
+
 async function analyzeAllChunks(
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
@@ -540,7 +569,7 @@ async function analyzeAllChunks(
       continue;
     }
 
-    allFindings.push(...result.data.findings);
+    allFindings.push(...keepFindingsOnChunkFiles(result.data.findings, chunk));
     succeededFilePaths.push(...chunk.files.map((file) => file.filePath));
     if (result.data.truncated) {
       truncatedFilePaths.push(...chunk.files.map((file) => file.filePath));
