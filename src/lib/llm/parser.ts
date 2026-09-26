@@ -43,35 +43,58 @@ export function parseTruncatedLlmReviewResponse(
   responseText: string,
   confidenceThreshold?: number,
 ): Result<readonly ReviewFinding[], LLMError> {
-  let repairedAny = false;
-  for (const arrayStart of findingsArrayStarts(responseText)) {
-    const repaired = closeAfterCompleteItems(responseText, arrayStart);
-    if (repaired === null) continue;
-    repairedAny = true;
-    const parsed = parseJsonArray(repaired);
-    if (parsed !== null) {
-      return ok(
-        validateFindings(
-          parsed,
-          confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
-        ),
-      );
-    }
+  const repaired = findingsArrayStarts(responseText).flatMap((arrayStart) => {
+    const text = closeAfterCompleteItems(responseText, arrayStart);
+    return text === null ? [] : [text];
+  });
+  const items = pickFindingsArray(repaired.map(parseJsonArray));
+  if (items !== null) {
+    return ok(
+      validateFindings(
+        items,
+        confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
+      ),
+    );
   }
-  if (repairedAny) return err("LLM_INVALID_RESPONSE");
+  if (repaired.length > 0) return err("LLM_INVALID_RESPONSE");
 
   // No finding was complete; the reply may still hold a whole empty array.
   const whole = parseLlmReviewResponse(responseText, confidenceThreshold);
   return whole.success ? whole : err("LLM_OUTPUT_LIMIT_REACHED");
 }
 
+// Each start is scanned to where its array closes, so the number tried is
+// capped: a reply full of "[{" in prose would otherwise take seconds (#121).
+const MAX_ARRAY_STARTS = 20;
+
 /**
- * Offsets of each "[" that can start the findings array: one followed, after
- * whitespace, by "{" or "]". A "[" in the prose (`items[0]`, `[src/a.ts]`) is
- * never one (#121).
+ * Offsets of the first "[" characters that can start the findings array: one
+ * followed, after whitespace, by "{" or "]". A "[" in the prose (`items[0]`,
+ * `[src/a.ts]`) is never one (#121).
  */
 function findingsArrayStarts(text: string): number[] {
-  return [...text.matchAll(/\[(?=\s*[{\]])/g)].map((match) => match.index);
+  const starts: number[] = [];
+  for (const match of text.matchAll(/\[(?=\s*[{\]])/g)) {
+    if (starts.length === MAX_ARRAY_STARTS) break;
+    starts.push(match.index);
+  }
+  return starts;
+}
+
+/**
+ * The first array holding a valid finding, else the first array. An example
+ * the model echoes before its findings (`[{"foo": "bar"}]`) holds none, so it
+ * doesn't hide the real findings after it.
+ */
+function pickFindingsArray(
+  arrays: readonly (unknown[] | null)[],
+): unknown[] | null {
+  const parsed = arrays.filter((items) => items !== null);
+  return (
+    parsed.find((items) => items.some((item) => validateFinding(item))) ??
+    parsed[0] ??
+    null
+  );
 }
 
 /**
@@ -145,15 +168,13 @@ const CODE_FENCE_PATTERN = /```(?:json)?[^\S\n]*\n?([\s\S]*?)\n?\s*```/g;
 
 /**
  * Finds the findings array in a reply: the whole reply, then each code fence,
- * then each closed array in the text. The first that parses as a JSON array
- * wins, so prose before or after it and other fences don't matter (#121).
+ * then each closed array in the text. Prose before or after it and other
+ * fences don't matter (#121).
  */
 function extractFindingsArray(text: string): unknown[] | null {
-  for (const candidate of candidateArrayTexts(text.trim())) {
-    const parsed = parseJsonArray(candidate);
-    if (parsed !== null) return parsed;
-  }
-  return null;
+  return pickFindingsArray(
+    candidateArrayTexts(text.trim()).map(parseJsonArray),
+  );
 }
 
 function candidateArrayTexts(text: string): string[] {
