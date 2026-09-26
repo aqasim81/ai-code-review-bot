@@ -112,11 +112,25 @@ interface LlmCallFailure {
   readonly retryAfterMs: number | null;
 }
 
-function canRetryLlmCall(failure: LlmCallFailure): boolean {
-  if (!isRetryableError(failure.error)) return false;
-  return (
-    failure.retryAfterMs === null || failure.retryAfterMs <= MAX_RETRY_AFTER_MS
-  );
+/**
+ * How long to wait before the next try, or null to stop here. A wait the API
+ * asks for is followed up to a minute. A longer one for a rate limit is left
+ * to the job's rate-limit backoff; for other errors, as in the SDK's own
+ * retry, it falls back to the short backoff.
+ */
+function nextRetryDelayMs(
+  failure: LlmCallFailure,
+  nextAttempt: number,
+): number | null {
+  if (!isRetryableError(failure.error)) return null;
+  const { retryAfterMs } = failure;
+  if (retryAfterMs !== null && retryAfterMs <= MAX_RETRY_AFTER_MS) {
+    return retryAfterMs;
+  }
+  if (retryAfterMs !== null && failure.error === "LLM_RATE_LIMITED") {
+    return null;
+  }
+  return exponentialDelayMs(BASE_RETRY_DELAY_MS, 3, nextAttempt);
 }
 
 async function callWithRetry(
@@ -127,21 +141,7 @@ async function callWithRetry(
   userMessage: string,
   maxRetries: number,
 ): Promise<Result<LlmRawResponse, LLMError>> {
-  let lastFailure: LlmCallFailure = {
-    error: "LLM_UNKNOWN_ERROR",
-    retryAfterMs: null,
-  };
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (attempt > 0) {
-      // Retrying before retry-after has passed fails again (rate-limit docs).
-      const delayMs =
-        lastFailure.retryAfterMs ??
-        exponentialDelayMs(BASE_RETRY_DELAY_MS, 3, attempt);
-      logger.info("Retrying LLM call", { attempt, delayMs });
-      await sleep(delayMs);
-    }
-
+  for (let attempt = 0; ; attempt++) {
     const result = await executeSingleLlmCall(
       client,
       modelId,
@@ -149,24 +149,21 @@ async function callWithRetry(
       system,
       userMessage,
     );
+    if (result.success) return result;
 
-    if (result.success) {
-      return result;
-    }
-
-    lastFailure = result.error;
-    if (!canRetryLlmCall(lastFailure)) {
-      return err(lastFailure.error);
-    }
+    const failure = result.error;
+    // Retrying before retry-after has passed fails again (rate-limit docs).
+    const delayMs = nextRetryDelayMs(failure, attempt + 1);
+    if (attempt >= maxRetries || delayMs === null) return err(failure.error);
 
     logger.warn("LLM call failed, will retry", {
       attempt,
-      error: lastFailure.error,
-      retryAfterMs: lastFailure.retryAfterMs,
+      error: failure.error,
+      retryAfterMs: failure.retryAfterMs,
+      delayMs,
     });
+    await sleep(delayMs);
   }
-
-  return err(lastFailure.error);
 }
 
 async function executeSingleLlmCall(

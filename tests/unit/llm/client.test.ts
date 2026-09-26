@@ -451,6 +451,27 @@ describe("createLlmClient", () => {
     });
   });
 
+  it("keeps the short backoff for a server error that asks for a long wait", async () => {
+    vi.useFakeTimers();
+    const overloaded = Object.assign(new MockInternalServerError(), {
+      headers: new Headers({ "retry-after": "600" }),
+    });
+    mockCreate.mockRejectedValueOnce(overloaded).mockResolvedValueOnce({
+      content: [{ type: "text", text: "[]" }],
+      usage: { input_tokens: 100, output_tokens: 50 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key", maxRetries: 1 });
+    const resultPromise = service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect((await resultPromise).success).toBe(true);
+  });
+
   it("retries on timeout error", async () => {
     vi.useFakeTimers();
 
