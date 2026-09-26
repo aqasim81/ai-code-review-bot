@@ -296,6 +296,30 @@ describe("createLlmClient", () => {
     });
   });
 
+  // Returned without a beta header by newer models, though the SDK types it
+  // only in its beta namespace; the provider's docs say to treat it as cut off.
+  it("treats a reply that filled the context window as cut off (#120)", async () => {
+    const parser = await import("@/lib/llm/parser");
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: '[{"filePath": "src/a.ts"' }],
+      stop_reason: "model_context_window_exceeded",
+      usage: { input_tokens: 190_000, output_tokens: 10_000 },
+    });
+
+    const service = createLlmClient({ apiKey: "test-key" });
+    const result = await service.analyzeReviewChunk(
+      createReviewChunk(),
+      createReviewPromptOptions(),
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({ truncated: true }),
+    });
+    expect(parser.parseTruncatedLlmReviewResponse).toHaveBeenCalled();
+    expect(parser.parseLlmReviewResponse).not.toHaveBeenCalled();
+  });
+
   it("reports a refusal without parsing its partial text or retrying (#120)", async () => {
     const parser = await import("@/lib/llm/parser");
     mockCreate.mockResolvedValueOnce({
