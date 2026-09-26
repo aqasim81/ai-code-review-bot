@@ -202,6 +202,21 @@ export function createReviewResult(
   };
 }
 
+/** A result with one finding on the chunk's first file. */
+export function createReviewResultForChunk(
+  chunk: ReviewChunk,
+  overrides?: Partial<ReviewFinding>,
+): ReviewResult {
+  return createReviewResult({
+    findings: [
+      createReviewFinding({
+        filePath: chunk.files[0]?.filePath ?? "src/lib/example.ts",
+        ...overrides,
+      }),
+    ],
+  });
+}
+
 // --- Comment Mapper types ---
 
 export function createUnmappedFinding(
@@ -284,9 +299,13 @@ export function createMockLlmService(
   overrides?: Partial<LLMService>,
 ): LLMService {
   return {
+    // A finding on the first file of the chunk, as the model only reports on
+    // files it was sent.
     analyzeReviewChunk: vi
       .fn<LLMService["analyzeReviewChunk"]>()
-      .mockResolvedValue(ok(createReviewResult())),
+      .mockImplementation(async (chunk) =>
+        ok(createReviewResultForChunk(chunk)),
+      ),
     ...overrides,
   };
 }

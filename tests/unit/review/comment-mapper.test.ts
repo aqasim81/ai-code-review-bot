@@ -422,3 +422,103 @@ describe("buildReviewSummary", () => {
     expect(summary).toContain("3 issues found");
   });
 });
+
+// GitHub rejects a review or comment body over 65,536 characters with 422
+// ("Body is too long (maximum is 65536 characters)"), failing the whole
+// review (#122).
+const GITHUB_BODY_LIMIT = 65_536;
+const MARKER =
+  "\n\n<!-- code-review-bot:review=00000000-0000-0000-0000-000000000000 -->";
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+describe("posted body lengths (#122)", () => {
+  function diffWithAddedLine(filePath: string) {
+    return createParsedDiff({
+      files: [
+        createParsedDiffFile({
+          filePath,
+          hunks: [
+            createDiffHunk({
+              lines: [
+                createDiffLine({
+                  type: "added",
+                  newLineNumber: 1,
+                  oldLineNumber: null,
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+  }
+
+  it("keeps an inline comment with a huge message and suggestion within GitHub's limit", () => {
+    const finding = createReviewFinding({
+      filePath: "src/a.ts",
+      lineNumber: 1,
+      message: "m".repeat(100_000),
+      suggestion: "s".repeat(100_000),
+    });
+
+    const result = mapFindingsToGitHubComments(
+      [finding],
+      diffWithAddedLine("src/a.ts"),
+    );
+
+    const body = result.mappedComments[0]?.formattedBody ?? "";
+    expect(body.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(body).toContain("m".repeat(1_000));
+    expect(body).toContain("truncated");
+  });
+
+  it("never splits a surrogate pair when shortening a comment", () => {
+    const finding = createReviewFinding({
+      filePath: "src/a.ts",
+      lineNumber: 1,
+      message: "😀".repeat(50_000),
+    });
+
+    const result = mapFindingsToGitHubComments(
+      [finding],
+      diffWithAddedLine("src/a.ts"),
+    );
+
+    const body = result.mappedComments[0]?.formattedBody ?? "";
+    expect(body.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(body).not.toMatch(LONE_SURROGATE);
+  });
+
+  it("keeps the summary of hundreds of long unmapped findings within GitHub's limit, marker included", () => {
+    const unmapped = Array.from({ length: 500 }, (_, index) =>
+      createUnmappedFinding({
+        finding: createReviewFinding({
+          filePath: `src/file-${index}.ts`,
+          lineNumber: 5_000,
+          message: "x".repeat(2_000),
+        }),
+      }),
+    );
+
+    const summary = buildReviewSummary("Review", 3, unmapped);
+
+    expect(`${summary}${MARKER}`.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(summary).toContain("src/file-0.ts:5000");
+    expect(summary).toMatch(/and \d+ more findings? not listed here/);
+    expect(summary).toContain("503 issues found (3 inline, 500 in summary)");
+  });
+
+  it("lists every unmapped finding when they fit", () => {
+    const unmapped = Array.from({ length: 20 }, (_, index) =>
+      createUnmappedFinding({
+        finding: createReviewFinding({ filePath: `src/file-${index}.ts` }),
+      }),
+    );
+
+    const summary = buildReviewSummary("Review", 0, unmapped);
+
+    expect(summary).toContain("src/file-19.ts");
+    expect(summary).not.toContain("not listed here");
+  });
+});
