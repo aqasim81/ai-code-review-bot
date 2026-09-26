@@ -264,6 +264,34 @@ describe("parseLlmReviewResponse — where the findings are in the reply (#121)"
     expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
   });
 
+  it.each([
+    [
+      "an example array before it",
+      `Format: [{"foo": "bar"}]\nFindings:\n[${finding}]`,
+    ],
+    [
+      "a fenced example before the fenced findings",
+      `\`\`\`json\n[{"example": true}]\n\`\`\`\nFindings:\n\`\`\`json\n[${finding}]\n\`\`\``,
+    ],
+  ])("prefers the array holding findings over %s", (_label, text) => {
+    const result = parseLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
+  });
+
+  // A reply is at most ~16000 tokens; parsing it must stay linear-ish.
+  it("parses a long reply full of unclosed [{ quickly", () => {
+    const text = "x [{".repeat(16_000);
+    const startedAt = performance.now();
+
+    parseLlmReviewResponse(text);
+    parseTruncatedLlmReviewResponse(text);
+
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
   it("still returns an empty array for a reply of [] after prose", () => {
     expect(parseLlmReviewResponse("No issues [none]:\n[]")).toEqual({
       success: true,
@@ -317,6 +345,16 @@ describe("parseTruncatedLlmReviewResponse", () => {
   // A "[" in the prose before the findings is not where they start (#121).
   it("skips brackets in the prose before the findings", () => {
     const text = `Looking at \`items[0]\` and [src/a.ts]:\n[${complete("kept")}, {"filePath": "src/b.ts"`;
+
+    const result = parseTruncatedLlmReviewResponse(text);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.map((finding) => finding.message)).toEqual(["kept"]);
+  });
+
+  it("prefers the cut-off array holding findings over an example array", () => {
+    const text = `Format: [{"foo": "bar"}]\n[${complete("kept")}, {"filePath": "src/b.ts"`;
 
     const result = parseTruncatedLlmReviewResponse(text);
 
