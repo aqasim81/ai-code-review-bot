@@ -272,29 +272,50 @@ describe("createLlmClient", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("reports the output limit when a cut-off reply has no complete finding (#120)", async () => {
-    const parser = await import("@/lib/llm/parser");
-    vi.mocked(parser.parseTruncatedLlmReviewResponse).mockReturnValueOnce({
-      success: false,
-      error: "LLM_INVALID_RESPONSE",
-    });
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: "text", text: '[{"filePath": "src/a.ts"' }],
-      stop_reason: "max_tokens",
-      usage: { input_tokens: 100, output_tokens: 16_000 },
-    });
+  // Through the real parser: only a reply cut before any complete item is the
+  // limit; a cut-off reply whose JSON is invalid is still bad output (#120).
+  it.each([
+    [
+      "no complete finding",
+      '[{"filePath": "src/a.ts"',
+      "LLM_OUTPUT_LIMIT_REACHED",
+    ],
+    [
+      "an array that closed before the cut but is not JSON",
+      'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts"',
+      "LLM_INVALID_RESPONSE",
+    ],
+    [
+      "a complete item that is not JSON",
+      '[{"filePath": src/a.ts}, {"filePath": "src/b.ts"',
+      "LLM_INVALID_RESPONSE",
+    ],
+  ])(
+    "classifies a cut-off reply with %s by what cut it (#120)",
+    async (_label, text, error) => {
+      const parser = await import("@/lib/llm/parser");
+      const actualParser =
+        await vi.importActual<typeof import("@/lib/llm/parser")>(
+          "@/lib/llm/parser",
+        );
+      vi.mocked(parser.parseTruncatedLlmReviewResponse).mockImplementationOnce(
+        actualParser.parseTruncatedLlmReviewResponse,
+      );
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text }],
+        stop_reason: "max_tokens",
+        usage: { input_tokens: 100, output_tokens: 16_000 },
+      });
 
-    const service = createLlmClient({ apiKey: "test-key" });
-    const result = await service.analyzeReviewChunk(
-      createReviewChunk(),
-      createReviewPromptOptions(),
-    );
+      const service = createLlmClient({ apiKey: "test-key" });
+      const result = await service.analyzeReviewChunk(
+        createReviewChunk(),
+        createReviewPromptOptions(),
+      );
 
-    expect(result).toEqual({
-      success: false,
-      error: "LLM_OUTPUT_LIMIT_REACHED",
-    });
-  });
+      expect(result).toEqual({ success: false, error });
+    },
+  );
 
   // Returned without a beta header by newer models, though the SDK types it
   // only in its beta namespace; the provider's docs say to treat it as cut off.

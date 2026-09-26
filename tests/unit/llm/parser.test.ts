@@ -273,10 +273,29 @@ describe("parseTruncatedLlmReviewResponse", () => {
     expect(result).toEqual({ success: true, data: [] });
   });
 
+  // The limit cut the reply before anything could be kept (#120).
   it.each([
     ["no complete finding", '[{"filePath": "src/a.ts", "message": "cut'],
     ["no array", "I could not review this because"],
-  ])("returns LLM_INVALID_RESPONSE when there is %s", (_label, text) => {
+    ["no text", ""],
+  ])("returns LLM_OUTPUT_LIMIT_REACHED when there is %s", (_label, text) => {
+    expect(parseTruncatedLlmReviewResponse(text)).toEqual({
+      success: false,
+      error: "LLM_OUTPUT_LIMIT_REACHED",
+    });
+  });
+
+  // Bad output the limit did not cause stays bad output, so a retry can help (#120).
+  it.each([
+    [
+      "an array that closed before the cut but is not JSON",
+      'Reviewing [src/a.ts] now: [{"filePath": "src/a.ts", "message": "cut',
+    ],
+    [
+      "a complete item that is not JSON",
+      `[{"filePath": src/a.ts}, ${complete("second")}, {"filePath": "src/b.ts"`,
+    ],
+  ])("returns LLM_INVALID_RESPONSE for %s", (_label, text) => {
     expect(parseTruncatedLlmReviewResponse(text)).toEqual({
       success: false,
       error: "LLM_INVALID_RESPONSE",
