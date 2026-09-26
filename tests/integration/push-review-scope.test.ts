@@ -15,12 +15,14 @@ vi.mock("@/lib/repository-utils");
 
 import {
   createReviewRecord,
+  findChunkAnalyses,
   findExistingReviewForPullRequestCommit,
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
   markReviewSuperseded,
   renewReviewClaim,
+  saveChunkAnalysis,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { parseRepositoryFullName } from "@/lib/repository-utils";
@@ -95,6 +97,8 @@ beforeEach(() => {
   vi.mocked(markReviewCompleted).mockResolvedValue(ok(true));
   vi.mocked(markReviewSuperseded).mockResolvedValue(ok(true));
   vi.mocked(renewReviewClaim).mockResolvedValue(ok(true));
+  vi.mocked(findChunkAnalyses).mockResolvedValue(ok(new Map()));
+  vi.mocked(saveChunkAnalysis).mockResolvedValue(ok(true));
   vi.mocked(initializeAstParser).mockResolvedValue(err("AST_INIT_FAILED"));
 });
 

@@ -19,12 +19,14 @@ import {
   claimExistingReview,
   createReviewRecord,
   failReview,
+  findChunkAnalyses,
   findExistingReviewForPullRequestCommit,
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
   markReviewSuperseded,
   renewReviewClaim,
+  saveChunkAnalysis,
   saveReviewFindings,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
@@ -54,6 +56,9 @@ function largeAddedFileDiff(filePath: string, lineCount = 800): string {
 }
 
 const NEW_REVIEW_CLAIM = { reviewId: reviewId(), claimToken: "new-token" };
+
+// A retry may follow, so the review's chunk analyses are kept.
+const NOT_FINAL_ATTEMPT = { dropChunkAnalyses: false };
 
 function retryClaimFor(id: string) {
   return { reviewId: reviewId(id), claimToken: "retry-token" };
@@ -86,6 +91,8 @@ function setupSuccessfulDbMocks() {
   );
   vi.mocked(failReview).mockResolvedValue(ok(true));
   vi.mocked(renewReviewClaim).mockResolvedValue(ok(true));
+  vi.mocked(findChunkAnalyses).mockResolvedValue(ok(new Map()));
+  vi.mocked(saveChunkAnalysis).mockResolvedValue(ok(true));
   vi.mocked(initializeAstParser).mockResolvedValue(ok(undefined));
   vi.mocked(parseFileAst).mockResolvedValue(
     ok({
@@ -420,6 +427,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to fetch PR diff",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -441,6 +449,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to parse PR diff",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -462,6 +471,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "LLM analysis failed",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -818,6 +828,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to check for an existing review on GitHub",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -875,6 +886,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to save review results",
+      NOT_FINAL_ATTEMPT,
     );
     expect(github.postPullRequestReview).not.toHaveBeenCalled();
   });
@@ -922,6 +934,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to mark review completed",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -987,6 +1000,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to check review claim",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -1104,6 +1118,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to save review results",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -1148,6 +1163,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Failed to post review to GitHub",
+      NOT_FINAL_ATTEMPT,
     );
     expect(markReviewCompleted).not.toHaveBeenCalled();
   });
@@ -1169,6 +1185,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Unexpected error during review",
+      NOT_FINAL_ATTEMPT,
     );
   });
 
@@ -1190,6 +1207,7 @@ describe("executeReview — review pipeline", () => {
     expect(failReview).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       "Unexpected error during review",
+      NOT_FINAL_ATTEMPT,
     );
     expect(markReviewCompleted).not.toHaveBeenCalled();
   });
@@ -1872,5 +1890,126 @@ describe("executeReview — findings checked against what the model was sent", (
     expect(markReviewCompleted).toHaveBeenCalled();
     const saved = vi.mocked(saveReviewFindings).mock.calls[0]?.[0];
     expect(saved?.comments).toHaveLength(400);
+  });
+});
+
+describe("executeReview — chunk analyses saved for a retry (#143)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithTwoChunks() {
+    return createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            `${largeAddedFileDiff("src/a.ts")}${largeAddedFileDiff("src/b.ts")}`,
+          ),
+        ),
+    });
+  }
+
+  it("saves each chunk the model analysed, and no failed one", async () => {
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockImplementationOnce(async (chunk) =>
+          ok(createReviewResultForChunk(chunk)),
+        )
+        .mockResolvedValueOnce(err("LLM_RATE_LIMITED")),
+    });
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithTwoChunks(),
+      llm,
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "REVIEW_LLM_RATE_LIMITED",
+    });
+    expect(saveChunkAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a saved analysis instead of calling the model for that chunk", async () => {
+    vi.mocked(findChunkAnalyses).mockImplementation(async (_id, keys) =>
+      ok(
+        new Map([
+          [
+            keys[0] ?? "",
+            createReviewResult({
+              findings: [createReviewFinding({ filePath: "src/a.ts" })],
+            }),
+          ],
+        ]),
+      ),
+    );
+    const llm = createMockLlmService();
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithTwoChunks(),
+      llm,
+    );
+
+    expect(result.success && result.data.issuesFound).toBe(2);
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(1);
+    expect(saveChunkAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it("analyses every chunk when the saved analyses can't be read", async () => {
+    vi.mocked(findChunkAnalyses).mockResolvedValue(err("connection lost"));
+    const llm = createMockLlmService();
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithTwoChunks(),
+      llm,
+    );
+
+    expect(result.success).toBe(true);
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(2);
+    expect(markReviewCompleted).toHaveBeenCalled();
+  });
+
+  it("completes the review when an analysis can't be saved", async () => {
+    vi.mocked(saveChunkAnalysis).mockResolvedValue(err("connection lost"));
+
+    const result = await executeReview(
+      createReviewRequest(),
+      githubWithTwoChunks(),
+      createMockLlmService(),
+    );
+
+    expect(result.success && result.data.issuesFound).toBe(2);
+    expect(markReviewCompleted).toHaveBeenCalled();
+  });
+});
+
+describe("executeReview — a failure on the job's final attempt (#143)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  it("drops the review's chunk analyses, as no retry will reuse them", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(err("GITHUB_TIMEOUT")),
+    });
+
+    await executeReview(
+      createReviewRequest({ isFinalAttempt: true }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(failReview).toHaveBeenCalledWith(
+      NEW_REVIEW_CLAIM,
+      "Failed to fetch PR diff",
+      { dropChunkAnalyses: true },
+    );
   });
 });

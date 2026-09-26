@@ -1,16 +1,20 @@
+import { createHash } from "node:crypto";
 import type { ReviewStatus } from "@/generated/prisma/enums";
 import {
   claimExistingReview,
   createReviewRecord,
   failReview,
+  findChunkAnalyses,
   findExistingReviewForPullRequestCommit,
   findOrCreateRepositoryForReview,
   isReviewClaimCurrent,
   markReviewCompleted,
   markReviewSuperseded,
   renewReviewClaim,
+  saveChunkAnalysis,
   saveReviewFindings,
 } from "@/lib/db/queries";
+import { env } from "@/lib/env";
 import { describeError } from "@/lib/errors";
 import { buildReviewMarker } from "@/lib/github/review-marker";
 import { startHeartbeat } from "@/lib/heartbeat";
@@ -53,6 +57,7 @@ import type {
   ReviewEngineResult,
   ReviewFinding,
   ReviewRequest,
+  ReviewResult,
 } from "@/types/review";
 import type { RepositorySettings } from "@/types/settings";
 
@@ -195,11 +200,18 @@ async function claimReviewRecord(
   return err("REVIEW_ALREADY_EXISTS");
 }
 
+/**
+ * On the job's final attempt no retry will reuse the chunk analyses, so they
+ * are dropped with the failure.
+ */
 async function markReviewFailed(
   claim: ReviewClaimRef,
   reason: string,
+  isFinalAttempt: boolean,
 ): Promise<void> {
-  const result = await failReview(claim, reason);
+  const result = await failReview(claim, reason, {
+    dropChunkAnalyses: isFinalAttempt,
+  });
   if (!result.success) {
     logger.error("Failed to mark review as failed", {
       reviewId: claim.reviewId,
@@ -534,12 +546,110 @@ function keepFindingsOnChunkFiles(
   return kept;
 }
 
+/**
+ * Identifies a chunk's request by everything that shapes it, so a saved
+ * analysis is reused only for the same chunk, settings and model; a new push,
+ * a settings change or another model means a new analysis.
+ */
+function chunkAnalysisKey(
+  chunk: ReviewChunk,
+  promptOptions: ReviewPromptOptions,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ modelId: env.LLM_MODEL_ID, promptOptions, chunk }))
+    .digest("hex");
+}
+
+interface ChunkAnalysisContext {
+  readonly claim: ReviewClaimRef;
+  readonly llmService: LLMService;
+  readonly promptOptions: ReviewPromptOptions;
+  /** Analyses an earlier attempt saved, by chunk key. */
+  readonly savedAnalyses: ReadonlyMap<string, ReviewResult>;
+}
+
+/**
+ * The analyses earlier attempts of this review saved. Saved analyses only
+ * spare model calls, so when they can't be read every chunk is analysed.
+ */
+async function loadSavedChunkAnalyses(
+  reviewId: ReviewId,
+  chunkKeys: readonly string[],
+): Promise<ReadonlyMap<string, ReviewResult>> {
+  const savedResult = await findChunkAnalyses(reviewId, chunkKeys);
+  if (!savedResult.success) {
+    logger.warn("Failed to read saved chunk analyses, analysing every chunk", {
+      reviewId,
+      error: savedResult.error,
+    });
+    return new Map();
+  }
+  if (savedResult.data.size > 0) {
+    logger.info("Reusing chunk analyses saved by an earlier attempt", {
+      reviewId,
+      reusedChunkCount: savedResult.data.size,
+      chunkCount: chunkKeys.length,
+    });
+  }
+  return savedResult.data;
+}
+
+/**
+ * The chunk's analysis: the one an earlier attempt saved (no tokens spent in
+ * this attempt), or the model's, saved when it succeeds so a retry of the job
+ * need not pay for it again (#143). Findings on files outside the chunk are
+ * dropped before saving (#123). Failures are never saved; a retry may fix
+ * them.
+ */
+async function analyzeChunkOrReuseSaved(
+  context: ChunkAnalysisContext,
+  chunk: ReviewChunk,
+): Promise<Result<ReviewResult, LLMError>> {
+  const chunkKey = chunkAnalysisKey(chunk, context.promptOptions);
+  const saved = context.savedAnalyses.get(chunkKey);
+  if (saved) {
+    return ok({ ...saved, tokenUsage: { inputTokens: 0, outputTokens: 0 } });
+  }
+
+  const result = await context.llmService.analyzeReviewChunk(
+    chunk,
+    context.promptOptions,
+  );
+  if (!result.success) return result;
+  const analysis = {
+    ...result.data,
+    findings: keepFindingsOnChunkFiles(result.data.findings, chunk),
+  };
+  const saveResult = await saveChunkAnalysis(context.claim, chunkKey, analysis);
+  if (!saveResult.success) {
+    logger.warn(
+      "Failed to save chunk analysis; a retry would analyse it again",
+      {
+        reviewId: context.claim.reviewId,
+        error: saveResult.error,
+      },
+    );
+  }
+  // A lost claim is noticed, and the review stopped, at its next guarded write.
+  return ok(analysis);
+}
+
 async function analyzeAllChunks(
+  claim: ReviewClaimRef,
   llmService: LLMService,
   chunks: readonly ReviewChunk[],
   promptOptions: ReviewPromptOptions,
   isFinalAttempt: boolean,
 ): Promise<Result<LlmAnalysisResult, StepFailure>> {
+  const context: ChunkAnalysisContext = {
+    claim,
+    llmService,
+    promptOptions,
+    savedAnalyses: await loadSavedChunkAnalyses(
+      claim.reviewId,
+      chunks.map((chunk) => chunkAnalysisKey(chunk, promptOptions)),
+    ),
+  };
   const allFindings: ReviewFinding[] = [];
   const failedChunkErrors: LLMError[] = [];
   const unanalyzedFilePaths: string[] = [];
@@ -550,7 +660,7 @@ async function analyzeAllChunks(
   let totalOutputTokens = 0;
 
   for (const chunk of chunks) {
-    const result = await llmService.analyzeReviewChunk(chunk, promptOptions);
+    const result = await analyzeChunkOrReuseSaved(context, chunk);
     if (!result.success) {
       const filePaths = chunk.files.map((file) => file.filePath);
       logger.error("LLM analysis failed for chunk", {
@@ -569,7 +679,7 @@ async function analyzeAllChunks(
       continue;
     }
 
-    allFindings.push(...keepFindingsOnChunkFiles(result.data.findings, chunk));
+    allFindings.push(...result.data.findings);
     succeededFilePaths.push(...chunk.files.map((file) => file.filePath));
     if (result.data.truncated) {
       truncatedFilePaths.push(...chunk.files.map((file) => file.filePath));
@@ -1006,6 +1116,7 @@ async function analyzeSaveAndPostReview(
   const { reviewId } = claim;
 
   const llmResult = await analyzeAllChunks(
+    claim,
     llmService,
     chunks,
     {
@@ -1135,7 +1246,11 @@ async function runReviewStepsWithFailureGuard(
     const result = await runReviewSteps(context);
     if (result.success) return result;
     if ("reason" in result.error) {
-      await markReviewFailed(context.claim, result.error.reason);
+      await markReviewFailed(
+        context.claim,
+        result.error.reason,
+        context.request.isFinalAttempt,
+      );
     }
     return err(result.error.code);
   } catch (error) {
@@ -1145,7 +1260,11 @@ async function runReviewStepsWithFailureGuard(
       pullRequest: context.request.pullRequestNumber,
       error: describeError(error),
     });
-    await markReviewFailed(context.claim, "Unexpected error during review");
+    await markReviewFailed(
+      context.claim,
+      "Unexpected error during review",
+      context.request.isFinalAttempt,
+    );
     return err("REVIEW_UNEXPECTED_ERROR");
   } finally {
     stopRenewingClaim();
