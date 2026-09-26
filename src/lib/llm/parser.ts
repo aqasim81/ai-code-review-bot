@@ -146,9 +146,10 @@ function validateFindings(
 
 /**
  * Finds the findings array in a reply: the whole reply if it is one, else the
- * last closed array holding a valid finding, else the last closed array. The
- * model puts examples before its answer, and prose around it or code fences
- * don't matter (#121).
+ * one closed array holding valid findings, else the last closed array (an
+ * empty answer). Prose around it and code fences don't matter (#121). Two
+ * arrays holding findings (an example and the answer) can't be told apart,
+ * so that reply is bad output, never a guess.
  */
 function extractFindingsArray(text: string): unknown[] | null {
   const trimmed = text.trim();
@@ -160,11 +161,11 @@ function extractFindingsArray(text: string): unknown[] | null {
     const items = parseJsonArray(trimmed.slice(start, closedAt + 1));
     return items === null ? [] : [items];
   });
-  return (
-    arrays.findLast((items) => items.some((item) => validateFinding(item))) ??
-    arrays.at(-1) ??
-    null
+  const withFindings = arrays.filter((items) =>
+    items.some((item) => validateFinding(item)),
   );
+  if (withFindings.length > 1) return null;
+  return withFindings[0] ?? arrays.at(-1) ?? null;
 }
 
 function parseJsonArray(text: string): unknown[] | null {
