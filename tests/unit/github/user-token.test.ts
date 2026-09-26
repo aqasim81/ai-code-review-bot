@@ -98,9 +98,9 @@ describe("keepUserTokenCurrent (#130)", () => {
     });
 
     expect(kept).toEqual({
-      status: "current",
+      status: "refresh-failed",
       tokens: TOKENS,
-      refreshError: failure,
+      error: failure,
     });
   });
 

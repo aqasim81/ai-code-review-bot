@@ -19,11 +19,11 @@ interface CacheEntry {
   readonly forced: boolean;
   readonly result: Promise<Result<FetchedAccess, UserAccessFetchError>>;
   /** A rate-limited result is reused until GitHub allows a retry (#142). */
-  readonly rateLimitedUntil?: number;
+  readonly rateLimitedUntil: number | null;
 }
 
 function isRateLimitedAt(entry: CacheEntry, now: number): boolean {
-  return entry.rateLimitedUntil !== undefined && now < entry.rateLimitedUntil;
+  return entry.rateLimitedUntil !== null && now < entry.rateLimitedUntil;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -68,7 +68,12 @@ export async function fetchUserRepositoryAccessShared(
   if (hit && (reusable || isRateLimitedAt(hit, now))) return hit.result;
 
   const result = fetchAndStamp(accessToken, now);
-  const entry: CacheEntry = { fetchedAt: now, forced, result };
+  const entry: CacheEntry = {
+    fetchedAt: now,
+    forced,
+    result,
+    rateLimitedUntil: null,
+  };
   cache.set(key, entry);
   const settled = await result;
   if (!settled.success && cache.get(key) === entry) {

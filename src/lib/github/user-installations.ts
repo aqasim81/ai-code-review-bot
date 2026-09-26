@@ -54,7 +54,10 @@ async function listInstallationRepositories(
  * timeout, which Octokit reports as 500) may pass on a retry. A 401 means
  * the user's token expired or was revoked, so they have to sign in again.
  */
-function classifyUserAccessError(error: unknown): UserAccessFetchError {
+function classifyUserAccessError(
+  error: unknown,
+  now: number,
+): UserAccessFetchError {
   const message = `Failed to fetch user repository access: ${describeError(error)}`;
   if (readResponseStatus(error) === 401) {
     return { kind: "token-rejected", message };
@@ -64,7 +67,7 @@ function classifyUserAccessError(error: unknown): UserAccessFetchError {
       return {
         kind: "rate-limited",
         message,
-        retryAt: readRateLimitRetryAt(error, Date.now()),
+        retryAt: readRateLimitRetryAt(error, now),
       };
     case "GITHUB_NOT_FOUND":
     case "GITHUB_UNKNOWN_ERROR":
@@ -129,6 +132,6 @@ export async function fetchUserRepositoryAccess(
       truncated,
     });
   } catch (error) {
-    return err(classifyUserAccessError(error));
+    return err(classifyUserAccessError(error, Date.now()));
   }
 }

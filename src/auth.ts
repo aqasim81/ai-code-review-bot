@@ -56,19 +56,17 @@ async function keepTokenCurrent(
     );
     return kept.status;
   }
-  if (kept.status === "unavailable" || kept.refreshError) {
+  if (kept.status === "unavailable" || kept.status === "refresh-failed") {
     logger.warn("Failed to refresh the user's GitHub token", {
       login: token.login,
-      error:
-        kept.status === "unavailable"
-          ? kept.error.message
-          : kept.refreshError?.message,
+      error: kept.error.message,
     });
   }
-  if (kept.status === "current") {
+  if (kept.status === "current" || kept.status === "refresh-failed") {
     token.accessToken = kept.tokens.accessToken;
     token.accessTokenExpiresAt = kept.tokens.expiresAt ?? undefined;
     token.refreshToken = kept.tokens.refreshToken ?? undefined;
+    return "current";
   }
   return kept.status;
 }

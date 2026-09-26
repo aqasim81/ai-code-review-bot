@@ -16,18 +16,29 @@ export interface UserTokens {
   readonly refreshToken: string | null;
 }
 
-/** A refresh GitHub refused needs a new sign-in; any other may pass later. */
-export interface TokenRefreshError {
-  readonly kind: "retryable" | "token-rejected";
-  readonly message: string;
-}
-
-export type KeptUserTokens =
+/**
+ * A refresh GitHub refused needs a new sign-in; a rate limit lasts until it
+ * resets; any other failure may pass on the next request.
+ */
+export type TokenRefreshError =
   | {
-      readonly status: "current";
+      readonly kind: "retryable" | "token-rejected";
+      readonly message: string;
+    }
+  | {
+      readonly kind: "rate-limited";
+      readonly message: string;
+      /** When GitHub allows the next request (ms epoch). */
+      readonly retryAt: number;
+    };
+
+type KeptUserTokens =
+  | { readonly status: "current"; readonly tokens: UserTokens }
+  /** The refresh failed for now; the old token still works. */
+  | {
+      readonly status: "refresh-failed";
       readonly tokens: UserTokens;
-      /** A refresh that failed while the old token still works. */
-      readonly refreshError?: TokenRefreshError;
+      readonly error: TokenRefreshError;
     }
   | { readonly status: "unavailable"; readonly error: TokenRefreshError }
   | { readonly status: "sign-in-required"; readonly reason: string };
@@ -68,7 +79,7 @@ export async function keepUserTokenCurrent(input: {
   }
   return expired
     ? { status: "unavailable", error: refreshed.error }
-    : { status: "current", tokens, refreshError: refreshed.error };
+    : { status: "refresh-failed", tokens, error: refreshed.error };
 }
 
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -81,6 +92,14 @@ const SHARED_RESULT_MS = 10 * 60_000;
 interface SharedRefresh {
   readonly startedAt: number;
   readonly result: Promise<Result<UserTokens, TokenRefreshError>>;
+  /** A rate-limited answer is reused until GitHub allows a retry. */
+  readonly rateLimitedUntil: number | null;
+}
+
+function isReusable(entry: SharedRefresh, now: number): boolean {
+  return entry.rateLimitedUntil === null
+    ? now - entry.startedAt < SHARED_RESULT_MS
+    : now < entry.rateLimitedUntil;
 }
 
 const sharedRefreshes = new Map<string, SharedRefresh>();
@@ -95,21 +114,28 @@ export async function refreshUserTokensShared(
   now: number,
 ): Promise<Result<UserTokens, TokenRefreshError>> {
   for (const [key, entry] of sharedRefreshes) {
-    if (now - entry.startedAt >= SHARED_RESULT_MS) sharedRefreshes.delete(key);
+    if (!isReusable(entry, now)) sharedRefreshes.delete(key);
   }
   // Keys are hashes so live tokens are not kept in memory as map keys.
   const key = createHash("sha256").update(refreshToken).digest("hex");
   const hit = sharedRefreshes.get(key);
   if (hit) return hit.result;
 
-  const entry = {
+  const entry: SharedRefresh = {
     startedAt: now,
     result: requestTokenRefresh(refreshToken, now),
+    rateLimitedUntil: null,
   };
   sharedRefreshes.set(key, entry);
   const settled = await entry.result;
-  if (!settled.success && settled.error.kind === "retryable") {
-    if (sharedRefreshes.get(key) === entry) sharedRefreshes.delete(key);
+  if (!settled.success && sharedRefreshes.get(key) === entry) {
+    if (settled.error.kind === "retryable") sharedRefreshes.delete(key);
+    if (settled.error.kind === "rate-limited") {
+      sharedRefreshes.set(key, {
+        ...entry,
+        rateLimitedUntil: settled.error.retryAt,
+      });
+    }
   }
   return settled;
 }
@@ -158,6 +184,23 @@ async function readJsonObject(
   }
 }
 
+// GitHub asks for at least a minute's wait after a rate limit that names no
+// time.
+const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
+
+function readRetryAt(response: Response, now: number): number {
+  const seconds = Number(response.headers.get("retry-after"));
+  return Number.isFinite(seconds) && seconds > 0
+    ? now + seconds * 1000
+    : now + DEFAULT_RATE_LIMIT_WAIT_MS;
+}
+
+/**
+ * Only GitHub's OAuth error field (bad_refresh_token and the like) says the
+ * refresh is refused and the user has to sign in again. A rate limit (429,
+ * or 403 as GitHub also reports it) waits for its reset; anything else may
+ * pass on a later request.
+ */
 function readTokenResponse(
   response: Response,
   body: Record<string, unknown> | null,
@@ -174,15 +217,19 @@ function readTokenResponse(
         typeof body.refresh_token === "string" ? body.refresh_token : null,
     });
   }
-  // GitHub answers a refused refresh (bad_refresh_token and the like) with an
-  // error field; a server error or a rate limit may pass later.
-  const retryable =
-    body?.error === undefined &&
-    (response.status >= 500 || response.status === 429);
-  return err({
-    kind: retryable ? "retryable" : "token-rejected",
-    message: `GitHub refused the token refresh: ${
-      typeof body?.error === "string" ? body.error : `HTTP ${response.status}`
-    }`,
-  });
+  if (typeof body?.error === "string") {
+    return err({
+      kind: "token-rejected",
+      message: `GitHub refused the token refresh: ${body.error}`,
+    });
+  }
+  const message = `Failed to refresh the GitHub token: HTTP ${response.status}`;
+  if (response.status === 429 || response.status === 403) {
+    return err({
+      kind: "rate-limited",
+      message,
+      retryAt: readRetryAt(response, now),
+    });
+  }
+  return err({ kind: "retryable", message });
 }
