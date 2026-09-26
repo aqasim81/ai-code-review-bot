@@ -17,9 +17,17 @@ export interface UserAccess extends AccessScope {
 /**
  * Why the user's access could not be read from GitHub, by what a retry can do:
  * a server error, timeout or race may pass within seconds; a rate limit lasts
- * until it resets; a refused token never changes on a retry.
+ * until it resets; a token GitHub rejects means the user has to sign in
+ * again; any other refusal never changes on a retry.
  */
-export interface UserAccessFetchError {
-  readonly kind: "retryable" | "rate-limited" | "permanent";
-  readonly message: string;
-}
+export type UserAccessFetchError =
+  | {
+      readonly kind: "retryable" | "permanent" | "token-rejected";
+      readonly message: string;
+    }
+  | {
+      readonly kind: "rate-limited";
+      readonly message: string;
+      /** When GitHub allows the next request (ms epoch). */
+      readonly retryAt: number;
+    };

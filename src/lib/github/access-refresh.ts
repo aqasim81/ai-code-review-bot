@@ -19,6 +19,11 @@ export interface AccessState {
    * not succeeded yet, so the access in use may be missing what they expect.
    */
   readonly pending: boolean;
+  /**
+   * GitHub rate-limited the user's token until then (ms epoch): no refresh is
+   * attempted before it, forced or not (#142). Absent when not limited.
+   */
+  readonly retryNotBefore?: number;
 }
 
 export interface FetchedAccess {
@@ -43,7 +48,12 @@ type RefreshOutcome =
   | { readonly kind: "refreshed" }
   | { readonly kind: "failed"; readonly error: UserAccessFetchError };
 
+function isRateLimited(state: AccessState, now: number): boolean {
+  return state.retryNotBefore !== undefined && now < state.retryNotBefore;
+}
+
 function isRefreshDue(state: AccessState, forced: boolean, now: number) {
+  if (isRateLimited(state, now)) return false;
   if (forced) return true;
   if (state.pending) return now - state.checkedAt >= PENDING_RETRY_INTERVAL_MS;
   return (
@@ -70,7 +80,9 @@ export async function refreshAccessState(
   const current = expired ? { ...state, access: EMPTY_USER_ACCESS } : state;
 
   if (!isRefreshDue(state, forced, now) || !accessToken) {
-    return { state: current, outcome: { kind: "unchanged" } };
+    // A refresh the user asked for during a rate limit waits for the reset.
+    const pending = current.pending || (forced && isRateLimited(state, now));
+    return { state: { ...current, pending }, outcome: { kind: "unchanged" } };
   }
 
   const result = await fetchAccess(accessToken);
@@ -90,13 +102,17 @@ export async function refreshAccessState(
   const expiresBeforeNextRetry =
     now + ACCESS_RETRY_INTERVAL_MS - state.fetchedAt >=
     2 * ACCESS_REFRESH_INTERVAL_MS;
+  const { retryNotBefore: _previousLimit, ...unlimited } = current;
+  const retryable =
+    result.error.kind === "retryable" || result.error.kind === "rate-limited";
   return {
     state: {
-      ...current,
+      ...unlimited,
       checkedAt: now,
-      pending:
-        result.error.kind !== "permanent" &&
-        (state.pending || forced || expiresBeforeNextRetry),
+      pending: retryable && (state.pending || forced || expiresBeforeNextRetry),
+      ...(result.error.kind === "rate-limited" && {
+        retryNotBefore: result.error.retryAt,
+      }),
     },
     outcome: { kind: "failed", error: result.error },
   };

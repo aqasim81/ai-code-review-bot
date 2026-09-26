@@ -15,6 +15,7 @@ Behaviour worth knowing that isn't obvious from one file:
 - **Superseded reviews:** before posting, the engine checks the PR head. A review of a replaced commit is `SUPERSEDED`: not posted, findings dropped, never a base for push (delta) reviews.
 - **Final statuses:** a deleted or suspended installation (404/403 on the token request) skips the job. The worker's `failed` handler marks unfinished job records FAILED, because BullMQ fails a job that stalled too often without running the processor.
 - **Owned and renewed records:** each run of a job claims its job record with a run token, and each review attempt its review with a claim token; writes need the current token. The owner renews its record every 5 minutes (for at most 3 hours). The worker's sweep fails reviews and job records not renewed for 30 minutes, so a dead worker or a failed final write never leaves one PROCESSING (#113, #114, #115).
+- **Dashboard sessions:** GitHub App user tokens expire after 8 hours. The session's `jwt` callback refreshes the token near expiry, once per single-use refresh token (`src/lib/github/user-token.ts`), and only pages behind the middleware can save it, so every page that reads the session must match `src/middleware.ts` (a test checks this). Only GitHub's refusal (an OAuth `error`, or a 401 on the access lookup) ends the session. A rate limit on the user's token blocks further lookups until it resets (#130, #142).
 
 ## Tech Stack
 

@@ -34,7 +34,7 @@ import {
   listReviewsInScope,
 } from "@/lib/db/queries";
 import { logger } from "@/lib/logger";
-import type { InstallationId } from "@/types/branded";
+import type { InstallationId, RepositoryId } from "@/types/branded";
 import { err, ok } from "@/types/results";
 
 const REPO_ID = "5f0c6a3e-8b8e-4f7c-9a52-2f6d6f1d2a11";
@@ -231,6 +231,66 @@ describe("dashboard pages while loading the user's GitHub access has failed", ()
       expect(html).not.toContain("No installations found");
     },
   );
+});
+
+// A repository or review outside the pending session's access may be one the
+// user can see once the access loads: not found and unauthorized would be
+// wrong answers until then (#141).
+describe("detail pages and actions while loading the user's GitHub access has failed", () => {
+  const PENDING_SESSION = { ...SESSION, accessPending: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGetSession.mockResolvedValue(PENDING_SESSION);
+    mockedAuth.mockResolvedValue(PENDING_SESSION);
+    allQueriesSucceedWithNoRows();
+  });
+
+  it.each([
+    ["repository settings", renderRepoSettings, "this repository"],
+    ["review detail", renderReviewDetail, "this review"],
+  ] as const)(
+    "the %s page says it could not be loaded instead of not found",
+    async (_page, render, what) => {
+      const html = await render();
+
+      expect(html).toContain(`Could not load ${what}`);
+    },
+  );
+
+  it("an action on a repository outside the access asks the user to retry", async () => {
+    const result = await toggleRepositoryEnabledAction(REPO_ID, true);
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining("try again"),
+    });
+  });
+
+  it("an action the access doesn't yet allow asks the user to retry", async () => {
+    vi.mocked(findAccessibleRepositoryById).mockResolvedValue(
+      ok({
+        id: REPO_ID as RepositoryId,
+        githubRepoId: 2,
+        fullName: "acme/app",
+        settings: {},
+      }),
+    );
+
+    const result = await toggleRepositoryEnabledAction(REPO_ID, true);
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining("try again"),
+    });
+  });
+
+  it("the pages still answer not found once the access has loaded", async () => {
+    mockedGetSession.mockResolvedValue({ ...SESSION, accessPending: false });
+
+    await expect(renderRepoSettings()).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(renderReviewDetail()).rejects.toThrow("NEXT_NOT_FOUND");
+  });
 });
 
 // A user with installation A installs the app on B and the refresh after the
