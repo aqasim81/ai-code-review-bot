@@ -33,14 +33,27 @@ const FORBIDDEN: ActionResult = {
   error: "You need admin or maintain permission on this repository.",
 };
 
+// While the user's access is loading, a repository missing from it or not yet
+// manageable in it may be allowed once it loads (#141).
+const ACCESS_PENDING: ActionResult = {
+  success: false,
+  error: "Your GitHub access is still loading. Please try again in a moment.",
+};
+
+interface RepositoryAuthorization {
+  readonly scope: AccessScope;
+  /** The answer when the scoped write matches no repository. */
+  readonly refusal: ActionResult;
+}
+
 /**
  * Returns the caller's access scope when they can manage the repository. A
  * repository outside their scope is reported as unauthorized, so the answer
- * does not reveal that it exists.
+ * does not reveal that it exists, unless their access is still loading.
  */
 async function authorizeRepositoryManagement(
   repositoryId: RepositoryId,
-): Promise<{ scope: AccessScope } | ActionResult> {
+): Promise<RepositoryAuthorization | ActionResult> {
   const session = await auth();
   if (!session) return UNAUTHORIZED;
 
@@ -54,11 +67,18 @@ async function authorizeRepositoryManagement(
     });
     return SAVE_FAILED;
   }
+  if (session.accessPending) {
+    if (!repo.data) return ACCESS_PENDING;
+    if (!canManageRepository(session.access, repo.data.githubRepoId)) {
+      return ACCESS_PENDING;
+    }
+    return { scope: session.access, refusal: ACCESS_PENDING };
+  }
   if (!repo.data) return UNAUTHORIZED;
   if (!canManageRepository(session.access, repo.data.githubRepoId)) {
     return FORBIDDEN;
   }
-  return { scope: session.access };
+  return { scope: session.access, refusal: FORBIDDEN };
 }
 
 export async function toggleRepositoryEnabledAction(
@@ -88,7 +108,7 @@ export async function toggleRepositoryEnabledAction(
     });
     return SAVE_FAILED;
   }
-  if (!result.data) return FORBIDDEN;
+  if (!result.data) return authorization.refusal;
 
   revalidatePath("/dashboard/repos");
   return { success: true };
@@ -133,7 +153,7 @@ export async function saveRepositorySettingsAction(
     });
     return SAVE_FAILED;
   }
-  if (!result.data) return FORBIDDEN;
+  if (!result.data) return authorization.refusal;
 
   revalidatePath(`/dashboard/repos/${repositoryId}`);
   revalidatePath("/dashboard/repos");

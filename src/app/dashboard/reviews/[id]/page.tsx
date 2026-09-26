@@ -48,6 +48,15 @@ export default async function ReviewDetailPage({
   }
 
   const { review } = loaded;
+  // Outside access that is still loading may be inside it once it loads.
+  if (!review && session.accessPending) {
+    return (
+      <div>
+        <PageHeader title="Review" />
+        <LoadFailedCard what="this review" />
+      </div>
+    );
+  }
   if (!review) {
     notFound();
   }

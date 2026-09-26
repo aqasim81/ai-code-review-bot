@@ -47,6 +47,15 @@ export default async function RepoSettingsPage({
   }
 
   const { repo } = loaded;
+  // Outside access that is still loading may be inside it once it loads.
+  if (!repo && session.accessPending) {
+    return (
+      <div>
+        <PageHeader title="Repository" />
+        <LoadFailedCard what="this repository" />
+      </div>
+    );
+  }
   if (!repo) {
     notFound();
   }
