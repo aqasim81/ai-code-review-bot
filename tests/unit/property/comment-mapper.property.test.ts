@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { mapFindingsToGitHubComments } from "@/lib/review/comment-mapper";
+import {
+  buildReviewSummary,
+  mapFindingsToGitHubComments,
+} from "@/lib/review/comment-mapper";
 import { parseUnifiedDiff } from "@/lib/review/diff-parser";
 import type { DiffLine, ParsedDiff, ParsedDiffFile } from "@/types/review";
 import { generatedDiffArbitrary } from "../../helpers/diff-arbitrary";
@@ -101,6 +104,35 @@ describe("mapFindingsToGitHubComments properties", () => {
           findings.length,
         );
       }),
+    );
+  });
+});
+
+describe("buildReviewSummary properties (#122)", () => {
+  const unmappedFindingArbitrary = fc
+    .record({
+      filePath: fc.string({ minLength: 1, maxLength: 300 }),
+      lineNumber: fc.integer({ min: 1, max: 1_000_000 }),
+      message: fc.string({ unit: "binary", minLength: 500, maxLength: 3_000 }),
+    })
+    .map((overrides) => ({
+      finding: createReviewFinding(overrides),
+      reason: "outside the diff",
+    }));
+
+  it("keeps the posted body within GitHub's 65,536-character limit", () => {
+    fc.assert(
+      fc.property(
+        fc.string({ maxLength: 3_000 }),
+        fc.array(unmappedFindingArbitrary, { minLength: 50, maxLength: 150 }),
+        (summaryText, unmapped) => {
+          const summary = buildReviewSummary(summaryText, 0, unmapped);
+          const marker =
+            "\n\n<!-- code-review-bot:review=00000000-0000-0000-0000-000000000000 -->";
+          expect(`${summary}${marker}`.length).toBeLessThanOrEqual(65_536);
+        },
+      ),
+      { numRuns: 20, endOnFailure: true },
     );
   });
 });

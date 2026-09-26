@@ -6,6 +6,7 @@ import {
   createReviewFinding,
   createReviewRequest,
   createReviewResult,
+  createReviewResultForChunk,
   repositoryId,
   reviewId,
 } from "../helpers/factories";
@@ -588,7 +589,10 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const criticalFinding = createReviewFinding({ severity: "CRITICAL" });
+    const criticalFinding = createReviewFinding({
+      filePath: "src/lib/utils.ts",
+      severity: "CRITICAL",
+    });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -616,7 +620,10 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const warningFinding = createReviewFinding({ severity: "WARNING" });
+    const warningFinding = createReviewFinding({
+      filePath: "src/lib/utils.ts",
+      severity: "WARNING",
+    });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -820,7 +827,7 @@ describe("executeReview — review pipeline", () => {
         .fn()
         .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
     });
-    const finding = createReviewFinding();
+    const finding = createReviewFinding({ filePath: "src/lib/utils.ts" });
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
@@ -1288,9 +1295,13 @@ describe("executeReview — a chunk whose analysis fails", () => {
     const llm = createMockLlmService({
       analyzeReviewChunk: vi
         .fn()
-        .mockResolvedValueOnce(ok(createReviewResult()))
+        .mockImplementationOnce(async (chunk) =>
+          ok(createReviewResultForChunk(chunk)),
+        )
         .mockResolvedValueOnce(err("LLM_CONTEXT_TOO_LONG"))
-        .mockResolvedValueOnce(ok(createReviewResult())),
+        .mockImplementationOnce(async (chunk) =>
+          ok(createReviewResultForChunk(chunk)),
+        ),
     });
 
     const result = await executeReview(createReviewRequest(), github, llm);
@@ -1674,11 +1685,24 @@ describe("executeReview — repository settings", () => {
       minimumSeverity: "WARNING",
       enabledCategories: ["BUGS", "SECURITY"],
     });
-    const kept = createReviewFinding({ category: "BUGS", severity: "WARNING" });
+    const onReviewedFile = { filePath: "src/lib/utils.ts" };
+    const kept = createReviewFinding({
+      ...onReviewedFile,
+      category: "BUGS",
+      severity: "WARNING",
+    });
     const llm = llmReturning([
       kept,
-      createReviewFinding({ category: "BUGS", severity: "SUGGESTION" }),
-      createReviewFinding({ category: "STYLE", severity: "CRITICAL" }),
+      createReviewFinding({
+        ...onReviewedFile,
+        category: "BUGS",
+        severity: "SUGGESTION",
+      }),
+      createReviewFinding({
+        ...onReviewedFile,
+        category: "STYLE",
+        severity: "CRITICAL",
+      }),
     ]);
 
     const result = await executeReview(
@@ -1762,5 +1786,91 @@ describe("executeReview — repository settings", () => {
       expect.anything(),
       expect.objectContaining({ enabledCategories: ["SECURITY", "BUGS"] }),
     );
+  });
+});
+
+describe("executeReview — findings checked against what the model was sent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessfulDbMocks();
+  });
+
+  function githubWithTwoChunks() {
+    return createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            `${largeAddedFileDiff("src/a.ts")}${largeAddedFileDiff("src/b.ts")}`,
+          ),
+        ),
+    });
+  }
+
+  it("keeps only findings on files of the chunk that was analysed (#123)", async () => {
+    const github = githubWithTwoChunks();
+    // Every reply reports both files and a file that isn't in the diff; only
+    // the finding on the chunk's own file is one the model could have seen.
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi.fn().mockImplementation(async (chunk) =>
+        ok(
+          createReviewResult({
+            findings: ["src/a.ts", "src/b.ts", "src/ghost.ts"].map((filePath) =>
+              createReviewFinding({
+                filePath,
+                lineNumber: 5,
+                message: `seen in chunk of ${chunk.files[0]?.filePath}`,
+              }),
+            ),
+          }),
+        ),
+      ),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(llm.analyzeReviewChunk).toHaveBeenCalledTimes(2);
+    expect(result.success && result.data.issuesFound).toBe(2);
+    const payload = vi.mocked(github.postPullRequestReview).mock.calls[0]?.[3];
+    expect(payload?.comments).toHaveLength(2);
+    for (const comment of payload?.comments ?? []) {
+      expect(comment.body).toContain(`seen in chunk of ${comment.path}`);
+    }
+    expect(payload?.body).not.toContain("src/ghost.ts");
+    const saved = vi.mocked(saveReviewFindings).mock.calls[0]?.[0];
+    expect(saved?.comments.map((comment) => comment.filePath).sort()).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+  });
+
+  it("posts a review whose many long unmapped findings would exceed GitHub's body limit (#122)", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi
+        .fn()
+        .mockResolvedValue(ok(SINGLE_FILE_TYPESCRIPT_DIFF)),
+    });
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      createReviewFinding({
+        filePath: "src/lib/utils.ts",
+        lineNumber: 1_000 + index,
+        message: "y".repeat(1_000),
+      }),
+    );
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(ok(createReviewResult({ findings }))),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success).toBe(true);
+    const body = vi.mocked(github.postPullRequestReview).mock.calls[0]?.[3]
+      .body;
+    expect(body?.length).toBeLessThanOrEqual(65_536);
+    expect(markReviewCompleted).toHaveBeenCalled();
+    const saved = vi.mocked(saveReviewFindings).mock.calls[0]?.[0];
+    expect(saved?.comments).toHaveLength(400);
   });
 });
