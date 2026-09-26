@@ -6,7 +6,7 @@ GitHub App that analyzes PRs using AST parsing + LLM analysis to post contextual
 
 ## Status
 
-**Phase 6: Testing & Polish** — Complete. All 6 phases done; now fixing bugs from GitHub Issues. 448 tests across 34 files (unit, integration, invariants) plus Playwright E2E. Coverage: 93% statements, 90% on review/, 97% on llm/.
+**Phase 6: Testing & Polish** — Complete. All 6 phases done; the remaining work is the open bug issues (`gh issue list`). 663 tests across 54 files (627 unit, including integration, property and invariant tests; 30 db; 6 queue) plus Playwright E2E. Coverage: 94% statements, 91% on review/, 99% on llm/.
 
 Behaviour worth knowing that isn't obvious from one file:
 - **Model:** set by `LLM_MODEL_ID`, default in `src/lib/env.ts`. The default model thinks by default and thinking counts toward the 16000-token output limit.
@@ -75,7 +75,7 @@ Webhook → Route Handler → Validate Signature → Enqueue Job (BullMQ)
 
 ## Testing
 
-- **Test after implementation** in a separate session — don't mix with coding sessions
+- **Features:** tests after implementation, in a separate session. **Bug fixes:** failing test first (see `.claude/rules/ai-native-workflow.md`)
 - **Unit (Vitest):** all `src/lib/` modules; property tests (fast-check) in `tests/unit/property/`. **Database (Vitest `db` project, `tests/db/`):** `src/lib/db/queries.ts` against a real Postgres, for what mocks can't show (NUL, integer range, unique races, guarded updates); runs in CI. **Queue (Vitest `queue` project, `tests/queue/`):** the job lifecycle through a real Worker (`worker/review-worker.ts`) on Valkey with the engine stubbed: success, unrecoverable, retries, stalls; runs in CI. **Integration (Vitest):** webhook→job, review engine e2e with mocked GitHub+LLM. **E2E (Playwright):** dashboard flows
 - **Coverage:** 80%+ on `src/lib/review/` and `src/lib/llm/` (advisory). Critical paths only for components/routes
 - Use interface-based mocks for GitHub API and LLM, `vitest.mock()` for everything else
@@ -125,7 +125,7 @@ Workflow rules: `.claude/rules/ai-native-workflow.md` (local). Review policy: `R
 
 ## Known mistakes to avoid
 (When the same mistake happens twice, add the correction here.)
-Bug issues carry a `kind: …` label matching these entries (lifecycle, error-classification, postgres-values, model-output, stale-state); the audit by kind is in `plans/changes/0090-audit-by-kind.md` (#90).
+Bug issues carry a `kind: …` label matching these entries (lifecycle, error-classification, postgres-values, model-output, stale-state; line-number bugs have no label of their own); the audit by kind is in `plans/changes/0090-audit-by-kind.md` (#90).
 
 - **Text Postgres rejects.** Text from outside (model output, webhook payloads, user input) can contain NUL (`\u0000`), which text and jsonb columns reject, failing the whole write. Strip or reject NUL before storing it (#67, #75).
 - **Values outside a column's range.** Numbers from the model (line numbers, confidence) are checked against the column's range before saving; one bad value fails the whole review's save (#55).
@@ -133,4 +133,5 @@ Bug issues carry a `kind: …` label matching these entries (lifecycle, error-cl
 - **Errors treated alike.** Every external call (GitHub, the model, the queue) classifies its errors as retryable, rate-limited or permanent. A retry must be able to help, and a call that never answers must fail within a time limit: a webhook's enqueue and each Postgres connection or statement give up well before GitHub's 10 s delivery timeout. A failure a retry can fix is never cached as the answer or shown as an empty one. A retry waits what the service's retry-after asks, and a rate limit it can't wait out in the call goes to the job's rate-limit backoff, not the short one (#14, #22, #54, #116, #118, #119, #137).
 - **Old and new line numbers.** Diff line numbers are either old-file or new-file; never mix them in one format or one lookup (#50, #64).
 - **Model output read by guesswork.** Read `stop_reason` before the text, and find the findings array by structure (a `[` followed by `{` or `]`, scanned string-aware), not by the first or last bracket. When the reply can't be read unambiguously (two arrays of findings), fail it as bad output rather than guess: a wrong guess drops findings silently or posts an example as one (#81, #120, #121).
+- **State that goes stale.** A job payload, job ID, push-review base, head SHA or repository name was right when it was saved and can be wrong when it is used (on a retry, after a rate-limit pause, after a new push or a rename). Read the current value just before acting on it. Key reviews and jobs by what makes them unique (PR and head commit), not by what they happen to share. The push-review base is the newest reviewed commit, not the review that finished last, and it carries forward files that were left unreviewed (#124–#130).
 - **Mocks confirm assumptions.** A test that mocks Postgres, BullMQ, GitHub or the model can't find these bugs. When a fix depends on how the real service behaves (what it rejects, how it fails), check the service's source or docs and cite it in the PR.
