@@ -281,20 +281,32 @@ describe("parseLlmReviewResponse — where the findings are in the reply (#121)"
     expect(result.data.map((f) => f.message)).toEqual(["Found [one] issue"]);
   });
 
-  it("prefers the findings after a well-formed example finding", () => {
-    const example = finding.replace("Found [one] issue", "EXAMPLE");
-    const second = finding.replace("src/a.ts", "src/b.ts");
-    const text = `For example:\n[${example}]\nThe findings:\n[${finding}, ${second}]`;
+  // Two arrays of well-formed findings can't be told apart (an example before
+  // or after the answer): fail as bad output, which a retry can fix, rather
+  // than silently keep the wrong one.
+  it.each([
+    [
+      "before",
+      (example: string, real: string) =>
+        `For example:\n${example}\nThe findings:\n${real}`,
+    ],
+    [
+      "after",
+      (example: string, real: string) =>
+        `The findings:\n${real}\nFor example:\n${example}`,
+    ],
+  ])(
+    "treats a well-formed example %s the findings as bad output",
+    (_label, compose) => {
+      const example = `[${finding.replace("Found [one] issue", "EXAMPLE")}]`;
+      const real = `[${finding}, ${finding.replace("src/a.ts", "src/b.ts")}]`;
 
-    const result = parseLlmReviewResponse(text);
-
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.map((f) => f.filePath)).toEqual([
-      "src/a.ts",
-      "src/b.ts",
-    ]);
-  });
+      expect(parseLlmReviewResponse(compose(example, real))).toEqual({
+        success: false,
+        error: "LLM_INVALID_RESPONSE",
+      });
+    },
+  );
 
   it("finds the findings after many empty arrays in the prose", () => {
     const prose = Array.from({ length: 25 }, () => "see []").join(" ");
