@@ -212,22 +212,27 @@ function readResponseHeader(error: unknown, name: string): string | null {
   return headers instanceof Headers ? headers.get(name) : null;
 }
 
+function positiveOrNull(ms: number): number | null {
+  return Number.isNaN(ms) || ms <= 0 ? null : ms;
+}
+
 /**
  * Reads how long the API asked to wait, as the SDK's own retry does:
- * retry-after-ms first, then retry-after in seconds or as an HTTP date.
+ * retry-after-ms first, then retry-after in seconds or as an HTTP date. A
+ * wait of zero or less (a date already past by this clock) is no answer, so
+ * the short backoff applies rather than an immediate retry.
  */
 function readRetryAfterMs(error: unknown): number | null {
-  const millis = Number.parseFloat(
-    readResponseHeader(error, "retry-after-ms") ?? "",
+  const millis = positiveOrNull(
+    Number.parseFloat(readResponseHeader(error, "retry-after-ms") ?? ""),
   );
-  if (!Number.isNaN(millis)) return Math.max(0, millis);
+  if (millis !== null) return millis;
 
   const retryAfter = readResponseHeader(error, "retry-after");
   if (retryAfter === null) return null;
   const seconds = Number.parseFloat(retryAfter);
-  if (!Number.isNaN(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(retryAfter);
-  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+  if (!Number.isNaN(seconds)) return positiveOrNull(seconds * 1000);
+  return positiveOrNull(Date.parse(retryAfter) - Date.now());
 }
 
 /**
