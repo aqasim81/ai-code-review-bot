@@ -281,6 +281,10 @@ function createGitHubService(
           });
           return ok({ githubReviewId: response.data.id, postedCommentCount });
         },
+        // The engine checks the head just before posting; a pause here would
+        // let a push land unseen in between (#125). A post over the limit
+        // fails as GITHUB_RATE_LIMITED and the job backs off instead.
+        { rateLimitCheck: false },
       );
     },
 
