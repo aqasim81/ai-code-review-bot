@@ -23,7 +23,14 @@ describe("session cookie size", () => {
         githubId: 12_345_678,
         login: "a-reasonably-long-login",
         avatarUrl: "https://avatars.githubusercontent.com/u/12345678?v=4",
-        accessToken: `gho_${"x".repeat(36)}`,
+        accessToken: `ghu_${"x".repeat(36)}`,
+        // GitHub App user tokens also carry a refresh token and expiry (#130).
+        refreshToken: `ghr_${"x".repeat(76)}`,
+        accessTokenExpiresAt: 1_700_000_000_000,
+        accessFetchedAt: 1_700_000_000_000,
+        accessCheckedAt: 1_700_000_000_000,
+        accessPending: true,
+        accessRetryNotBefore: 1_700_000_000_000,
         access: {
           githubInstallationIds: [99_999_999, 99_999_998, 99_999_997],
           accessibleGithubRepoIds: repoIds,

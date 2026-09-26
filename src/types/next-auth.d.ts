@@ -25,6 +25,9 @@ declare module "next-auth/jwt" {
     login?: string;
     avatarUrl?: string;
     accessToken?: string;
+    /** When the access token expires (ms epoch); absent when it never does. */
+    accessTokenExpiresAt?: number;
+    refreshToken?: string;
     access?: UserAccess;
     accessFetchedAt?: number;
     accessCheckedAt?: number;
