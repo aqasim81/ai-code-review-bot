@@ -128,6 +128,19 @@ describe("review job producer", () => {
     expect(queueAdd).not.toHaveBeenCalled();
   });
 
+  it("skips when a racing re-trigger already replaced the finished job and it is running", async () => {
+    const finishedJob = existingJob("completed");
+    finishedJob.remove.mockRejectedValueOnce(new Error("job is locked"));
+    queueGetJob
+      .mockResolvedValueOnce(finishedJob)
+      .mockResolvedValueOnce(existingJob("active"));
+
+    const result = await enqueueReviewJob(PAYLOAD);
+
+    expect(result).toEqual({ success: true, data: { jobId: FULL_JOB_ID } });
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
   it("returns QUEUE_ENQUEUE_FAILED when adding the job fails", async () => {
     queueAdd.mockRejectedValueOnce(new Error("connection lost"));
 

@@ -171,6 +171,50 @@ describe("executeReview — what a push review covers (#129)", () => {
     expect(result.success).toBe(true);
     expect(savedCoverage().coveredFilePaths).toEqual(["src/first.ts"]);
   });
+
+  it("leaves the files of a reply cut off at the output limit uncovered", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(ok(MULTI_FILE_DIFF)),
+    });
+    const llm = createMockLlmService({
+      analyzeReviewChunk: vi
+        .fn()
+        .mockResolvedValue(ok({ ...createReviewResult(), truncated: true })),
+    });
+
+    const result = await executeReview(createReviewRequest(), github, llm);
+
+    expect(result.success).toBe(true);
+    expect(savedCoverage().coveredFilePaths).toEqual([]);
+  });
+});
+
+describe("executeReview — a review an earlier attempt posted (#129)", () => {
+  it("counts only the files carried forward, not this attempt's analysis", async () => {
+    const github = createMockGitHubService({
+      fetchPullRequestDiff: vi.fn().mockResolvedValue(ok(MULTI_FILE_DIFF)),
+      findPostedReview: vi.fn().mockResolvedValue(ok({ githubReviewId: 7 })),
+    });
+
+    await executeReview(
+      createReviewRequest({
+        pushReviewBase: {
+          changedFilePaths: ["src/lib/auth.ts"],
+          coveredFilePaths: MULTI_FILE_PATHS,
+          settingsFingerprint: DEFAULT_FINGERPRINT,
+        },
+      }),
+      github,
+      createMockLlmService(),
+    );
+
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(markReviewCompleted).toHaveBeenCalledWith(
+      CLAIM,
+      expect.any(Number),
+      ["src/lib/handler.py", "src/main.go"],
+    );
+  });
 });
 
 describe("executeReview — completing without analysis (#128)", () => {
@@ -196,22 +240,22 @@ describe("executeReview — completing without analysis (#128)", () => {
 
 describe("executeReview — the time GitHub reported the commit (#127, #128)", () => {
   it("orders the repository name and the review by the event, not the run", async () => {
-    const eventReceivedAt = new Date("2026-09-01T10:00:00Z");
+    const eventAt = new Date("2026-09-01T10:00:00Z");
     const github = createMockGitHubService({
       fetchPullRequestDiff: vi.fn().mockResolvedValue(ok(MULTI_FILE_DIFF)),
     });
 
     await executeReview(
-      createReviewRequest({ eventReceivedAt }),
+      createReviewRequest({ eventAt }),
       github,
       createMockLlmService(),
     );
 
     expect(findOrCreateRepositoryForReview).toHaveBeenCalledWith(
-      expect.objectContaining({ nameSeenAt: eventReceivedAt }),
+      expect.objectContaining({ nameSeenAt: eventAt }),
     );
     expect(createReviewRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ headSeenAt: eventReceivedAt }),
+      expect.objectContaining({ headSeenAt: eventAt }),
     );
   });
 });

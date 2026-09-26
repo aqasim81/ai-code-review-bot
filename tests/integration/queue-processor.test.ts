@@ -507,7 +507,25 @@ describe("processReviewJob", () => {
     },
   );
 
-  it("dates the review by when the job was queued, which retries keep (#127, #128)", async () => {
+  it("dates the review by the event's time from the payload (#127, #128)", async () => {
+    const job = createMockJob({ timestamp: Date.now() });
+    job.data = {
+      ...job.data,
+      payload: { ...job.data.payload, eventAt: "2026-09-01T10:00:00Z" },
+    };
+
+    await processReviewJob(job);
+
+    expect(executeReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventAt: new Date("2026-09-01T10:00:00Z"),
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("falls back to when the job was queued for a payload without the event's time", async () => {
     const queuedAt = Date.parse("2026-09-01T10:00:00Z");
 
     await processReviewJob(
@@ -515,7 +533,7 @@ describe("processReviewJob", () => {
     );
 
     expect(executeReview).toHaveBeenCalledWith(
-      expect.objectContaining({ eventReceivedAt: new Date(queuedAt) }),
+      expect.objectContaining({ eventAt: new Date(queuedAt) }),
       expect.anything(),
       expect.anything(),
     );

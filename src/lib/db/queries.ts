@@ -593,15 +593,26 @@ export async function renewReviewClaim(
   });
 }
 
-/** Returns false (and writes nothing) when the claim was lost. */
+/**
+ * Returns false (and writes nothing) when the claim was lost. Given
+ * `coveredFilePaths`, it replaces the ones saved with the findings.
+ */
 export async function markReviewCompleted(
   claim: ReviewClaimRef,
   processingTimeMs: number,
+  coveredFilePaths?: readonly string[],
 ): Promise<Result<boolean, string>> {
   return runQuery("Failed to mark review completed", async () => {
     const { count } = await prisma.review.updateMany({
       where: currentClaimFilter(claim),
-      data: { status: "COMPLETED", processingTimeMs, completedAt: new Date() },
+      data: {
+        status: "COMPLETED",
+        processingTimeMs,
+        completedAt: new Date(),
+        ...(coveredFilePaths === undefined
+          ? {}
+          : { coveredFilePaths: [...coveredFilePaths] }),
+      },
     });
     return ok(count > 0);
   });

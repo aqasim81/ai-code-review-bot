@@ -313,6 +313,15 @@ async function buildPushReviewBase(
   };
 }
 
+/**
+ * The event's time from the payload. A job queued before the payload carried
+ * it falls back to when the job was added, which retries and delays keep.
+ */
+function readEventTime(job: Job<ReviewJobData>): Date {
+  const { eventAt } = job.data.payload;
+  return eventAt === undefined ? new Date(job.timestamp) : new Date(eventAt);
+}
+
 async function buildReviewRequest(
   job: Job<ReviewJobData>,
   jobId: string,
@@ -327,8 +336,7 @@ async function buildReviewRequest(
     commitSha: payload.commitSha,
     jobId,
     isFinalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
-    // Set when the job was added and kept across retries and delays.
-    eventReceivedAt: new Date(job.timestamp),
+    eventAt: readEventTime(job),
   };
 
   if (type !== "review-pr-delta") return baseRequest;

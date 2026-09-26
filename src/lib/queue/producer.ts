@@ -82,7 +82,18 @@ async function findLiveJobWithSameId(
   if (state === "unknown") return null;
   if (!FINISHED_JOB_STATES.has(state)) return existingJob;
 
-  await existingJob.remove();
+  try {
+    await existingJob.remove();
+  } catch (error) {
+    // Another re-trigger removed the finished job and added a new one, which
+    // is now running (BullMQ refuses to remove a locked job).
+    const current = await queue.getJob(jobId);
+    if (current && !FINISHED_JOB_STATES.has(await current.getState())) {
+      return current;
+    }
+    // throw-ok: enqueueJob catches it and returns QUEUE_ENQUEUE_FAILED.
+    throw error;
+  }
   logger.info("Removed finished review job so it can be re-triggered", {
     jobId,
     state,

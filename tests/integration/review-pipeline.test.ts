@@ -124,7 +124,7 @@ describe("executeReview — review pipeline", () => {
       githubInstallationId: 12345,
       githubRepoId: 555,
       fullName: "test-owner/test-repo",
-      nameSeenAt: createReviewRequest().eventReceivedAt,
+      nameSeenAt: createReviewRequest().eventAt,
     });
     expect(findExistingReviewForPullRequestCommit).toHaveBeenCalled();
     expect(createReviewRecord).toHaveBeenCalled();
@@ -141,6 +141,7 @@ describe("executeReview — review pipeline", () => {
     expect(markReviewCompleted).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       expect.any(Number),
+      undefined,
     );
   });
 
@@ -280,7 +281,7 @@ describe("executeReview — review pipeline", () => {
         reviewId("stuck-review"),
         {
           jobId: "job-1",
-          headSeenAt: createReviewRequest().eventReceivedAt,
+          headSeenAt: createReviewRequest().eventAt,
           staleBefore: expect.any(Date),
         },
       );
@@ -288,6 +289,7 @@ describe("executeReview — review pipeline", () => {
       expect(markReviewCompleted).toHaveBeenCalledWith(
         retryClaimFor("stuck-review"),
         expect.any(Number),
+        undefined,
       );
     },
   );
@@ -762,6 +764,7 @@ describe("executeReview — review pipeline", () => {
     expect(markReviewCompleted).toHaveBeenCalledWith(
       NEW_REVIEW_CLAIM,
       expect.any(Number),
+      [],
     );
   });
 
@@ -1023,7 +1026,7 @@ describe("executeReview — review pipeline", () => {
       reviewId("failed-review"),
       {
         jobId: "job-1",
-        headSeenAt: createReviewRequest().eventReceivedAt,
+        headSeenAt: createReviewRequest().eventAt,
         staleBefore: expect.any(Date),
       },
     );
@@ -1032,6 +1035,7 @@ describe("executeReview — review pipeline", () => {
     expect(markReviewCompleted).toHaveBeenCalledWith(
       retryClaimFor("failed-review"),
       expect.any(Number),
+      undefined,
     );
   });
 

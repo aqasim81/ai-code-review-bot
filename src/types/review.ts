@@ -161,11 +161,11 @@ export interface ReviewRequest {
    */
   readonly isFinalAttempt: boolean;
   /**
-   * When GitHub reported the commit as the pull request's head: the time the
-   * job was queued, kept across retries and delays. Orders what the review
-   * writes against what later events wrote.
+   * When GitHub reported the commit as the pull request's head: the event's
+   * own time, which retries, delays and redeliveries keep. Orders what the
+   * review writes against what later events wrote.
    */
-  readonly eventReceivedAt: Date;
+  readonly eventAt: Date;
   /** For a push review: the earlier review it builds on. Absent for a full review. */
   readonly pushReviewBase?: PushReviewBase;
 }

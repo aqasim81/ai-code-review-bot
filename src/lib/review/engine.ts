@@ -68,7 +68,7 @@ async function lookupRepository(
     githubInstallationId: request.installationId,
     githubRepoId: request.githubRepoId,
     fullName: request.repositoryFullName,
-    nameSeenAt: request.eventReceivedAt,
+    nameSeenAt: request.eventAt,
   });
   if (!repoResult.success) {
     logger.error("Failed to look up repository", {
@@ -106,7 +106,7 @@ async function createNewReviewRecord(
     pullRequestNumber: request.pullRequestNumber,
     commitSha: request.commitSha,
     claimedByJobId: request.jobId,
-    headSeenAt: request.eventReceivedAt,
+    headSeenAt: request.eventAt,
   });
   if (!createResult.success) {
     logger.error("Failed to create review record", {
@@ -132,7 +132,7 @@ async function claimExistingReviewForRetry(
   const reviewId = existing.id;
   const claimResult = await claimExistingReview(reviewId, {
     jobId,
-    headSeenAt: request.eventReceivedAt,
+    headSeenAt: request.eventAt,
     staleBefore: new Date(Date.now() - STALE_PROCESSING_REVIEW_MS),
   });
   if (!claimResult.success) {
@@ -440,7 +440,7 @@ interface LlmAnalysisResult {
   readonly findings: ReviewFinding[];
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
-  /** Files analysed in full: every chunk they were in succeeded. */
+  /** Files analysed in full: every chunk they were in succeeded, uncut. */
   readonly analyzedFilePaths: readonly string[];
   /** Files of chunks whose analysis failed while the rest succeeded. */
   readonly unanalyzedFilePaths: readonly string[];
@@ -552,16 +552,19 @@ async function analyzeAllChunks(
   if (failedChunkErrors.length === chunks.length) {
     return llmAnalysisFailed(failedChunkErrors);
   }
-  const failedFilePaths = new Set([
+  // A reply cut off at the output limit may have lost findings, so its files
+  // stay uncovered and the next push review looks at them again (#129).
+  const incompleteFilePaths = new Set([
     ...unanalyzedFilePaths,
     ...outputLimitFilePaths,
+    ...truncatedFilePaths,
   ]);
   return ok({
     findings: allFindings,
     totalInputTokens,
     totalOutputTokens,
     analyzedFilePaths: [...new Set(succeededFilePaths)].filter(
-      (filePath) => !failedFilePaths.has(filePath),
+      (filePath) => !incompleteFilePaths.has(filePath),
     ),
     unanalyzedFilePaths,
     outputLimitFilePaths,
@@ -700,7 +703,7 @@ async function isCommitStillHead(
   return ok(true);
 }
 
-type PostOutcome = "posted" | "superseded";
+type PostOutcome = "posted" | "posted-earlier" | "superseded";
 
 async function postReviewToGitHub(
   context: ReviewStepsContext,
@@ -718,7 +721,7 @@ async function postReviewToGitHub(
   const marker = buildReviewMarker(claim.reviewId);
   const earlierPost = await wasPostedByEarlierAttempt(context, marker);
   if (!earlierPost.success) return earlierPost;
-  if (earlierPost.data) return ok("posted");
+  if (earlierPost.data) return ok("posted-earlier");
 
   const headCheck = await isCommitStillHead(context);
   if (!headCheck.success) return headCheck;
@@ -814,10 +817,11 @@ async function saveFindingsOrFailReview(
 async function completeReviewOrFail(
   claim: ReviewClaimRef,
   startTime: number,
+  coveredFilePaths?: readonly string[],
 ): Promise<Result<number, StepFailure>> {
   const processingTimeMs = Date.now() - startTime;
   const completeResult = requireClaimedWrite(
-    await markReviewCompleted(claim, processingTimeMs),
+    await markReviewCompleted(claim, processingTimeMs, coveredFilePaths),
     claim,
     "complete",
     "Failed to mark review completed",
@@ -1035,7 +1039,16 @@ async function analyzeSaveAndPostReview(
     return completeSupersededReview(claim, startTime);
   }
 
-  const completeResult = await completeReviewOrFail(claim, startTime);
+  // What an earlier attempt posted is unknown (its chunks may have failed),
+  // so this attempt's analysis counts for nothing; the next push review
+  // looks at those files again.
+  const completeResult = await completeReviewOrFail(
+    claim,
+    startTime,
+    postResult.data === "posted-earlier"
+      ? files.carriedForwardFilePaths
+      : undefined,
+  );
   if (!completeResult.success) return completeResult;
 
   logger.info("Review complete", {

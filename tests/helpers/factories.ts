@@ -227,7 +227,7 @@ export function createReviewRequest(
     commitSha: "abc123def456",
     jobId: "job-1",
     isFinalAttempt: false,
-    eventReceivedAt: new Date("2026-09-01T00:00:00Z"),
+    eventAt: new Date("2026-09-01T00:00:00Z"),
     ...overrides,
   };
 }

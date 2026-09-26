@@ -64,6 +64,7 @@ const pullRequestEventPayloadSchema = pullRequestActionSchema.extend({
   pull_request: z.object({
     number: z.number().int().positive(),
     head: z.object({ sha: commitShaSchema }),
+    updated_at: z.iso.datetime({ offset: true }).optional(),
   }),
   repository: z.object({
     id: z.number().int().positive(),
@@ -336,6 +337,9 @@ export async function handlePullRequestEvent(
     repositoryFullName: payload.repository.full_name,
     pullRequestNumber: payload.pull_request.number,
     commitSha: payload.pull_request.head.sha,
+    // A redelivery carries the original time, so it cannot pass for a newer
+    // event than one handled since (#127, #128).
+    eventAt: payload.pull_request.updated_at ?? new Date().toISOString(),
   });
 
   if (!result.success) {
