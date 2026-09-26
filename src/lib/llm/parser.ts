@@ -35,90 +35,70 @@ export function parseLlmReviewResponse(
 
 /**
  * Parses a reply cut off at the output token limit: keeps the findings that
- * were complete before the cut and drops the partial one. A cut before any
- * item was complete is LLM_OUTPUT_LIMIT_REACHED; a closed or repaired array
- * that is not valid JSON is still LLM_INVALID_RESPONSE.
+ * were complete before the cut and drops the partial one. The limit cuts the
+ * reply inside or after its findings, so an array still open at the end is
+ * the findings. A cut before any item was complete is
+ * LLM_OUTPUT_LIMIT_REACHED; a closed or repaired array that is not valid
+ * JSON is still LLM_INVALID_RESPONSE.
  */
 export function parseTruncatedLlmReviewResponse(
   responseText: string,
   confidenceThreshold?: number,
 ): Result<readonly ReviewFinding[], LLMError> {
-  const repaired = findingsArrayStarts(responseText).flatMap((arrayStart) => {
-    const text = closeAfterCompleteItems(responseText, arrayStart);
-    return text === null ? [] : [text];
-  });
-  const items = pickFindingsArray(repaired.map(parseJsonArray));
-  if (items !== null) {
-    return ok(
-      validateFindings(
-        items,
-        confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
-      ),
-    );
+  const spans = findTopLevelArrays(responseText);
+  const last = spans.at(-1);
+  if (last === undefined) return err("LLM_OUTPUT_LIMIT_REACHED");
+  // Every array closed: the cut came after the findings.
+  if (last.closedAt !== null) {
+    return parseLlmReviewResponse(responseText, confidenceThreshold);
   }
-  if (repaired.length > 0) return err("LLM_INVALID_RESPONSE");
+  if (last.lastItemEnd === null) return err("LLM_OUTPUT_LIMIT_REACHED");
 
-  // No finding was complete; the reply may still hold a whole empty array.
-  const whole = parseLlmReviewResponse(responseText, confidenceThreshold);
-  return whole.success ? whole : err("LLM_OUTPUT_LIMIT_REACHED");
-}
-
-// Each start is scanned to where its array closes, so the number tried is
-// capped: a reply full of "[{" in prose would otherwise take seconds (#121).
-const MAX_ARRAY_STARTS = 20;
-
-/**
- * Offsets of the first "[" characters that can start the findings array: one
- * followed, after whitespace, by "{" or "]". A "[" in the prose (`items[0]`,
- * `[src/a.ts]`) is never one (#121).
- */
-function findingsArrayStarts(text: string): number[] {
-  const starts: number[] = [];
-  for (const match of text.matchAll(/\[(?=\s*[{\]])/g)) {
-    if (starts.length === MAX_ARRAY_STARTS) break;
-    starts.push(match.index);
-  }
-  return starts;
-}
-
-/**
- * The first array holding a valid finding, else the first array. An example
- * the model echoes before its findings (`[{"foo": "bar"}]`) holds none, so it
- * doesn't hide the real findings after it.
- */
-function pickFindingsArray(
-  arrays: readonly (unknown[] | null)[],
-): unknown[] | null {
-  const parsed = arrays.filter((items) => items !== null);
-  return (
-    parsed.find((items) => items.some((item) => validateFinding(item))) ??
-    parsed[0] ??
-    null
+  const items = parseJsonArray(
+    `${responseText.slice(last.start, last.lastItemEnd + 1)}]`,
+  );
+  if (items === null) return err("LLM_INVALID_RESPONSE");
+  return ok(
+    validateFindings(
+      items,
+      confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
+    ),
   );
 }
 
-/**
- * Scans JSON text from the opening "[" and returns the array up to where it
- * closes, or up to its last complete item with "]" appended. Brackets inside
- * strings are ignored. Null when no item is complete.
- */
-function closeAfterCompleteItems(
-  text: string,
-  arrayStart: number,
-): string | null {
-  const scan = scanArray(text, arrayStart);
-  if (scan.closedAt !== null) return text.slice(arrayStart, scan.closedAt + 1);
-  return scan.lastItemEnd === null
-    ? null
-    : `${text.slice(arrayStart, scan.lastItemEnd + 1)}]`;
-}
-
-interface ArrayScan {
+interface ArraySpan {
+  readonly start: number;
+  /** Where the array closes; null when the text ends inside it. */
   readonly closedAt: number | null;
+  /** The end of its last complete item, if any. */
   readonly lastItemEnd: number | null;
 }
 
-function scanArray(text: string, arrayStart: number): ArrayScan {
+/**
+ * The arrays in the text that can hold findings, in order: each starts with a
+ * "[" followed, after whitespace, by "{" or "]", so a "[" in the prose
+ * (`items[0]`, `[src/a.ts]`) never starts one (#121). Arrays nested in
+ * another are skipped, and an array still open at the end of the text holds
+ * everything after its start, so each character is scanned once.
+ */
+function findTopLevelArrays(text: string): ArraySpan[] {
+  const spans: ArraySpan[] = [];
+  const arrayStart = /\[(?=\s*[{\]])/g;
+  for (let match = arrayStart.exec(text); match !== null; ) {
+    const span = { start: match.index, ...scanArray(text, match.index) };
+    spans.push(span);
+    if (span.closedAt === null) break;
+    arrayStart.lastIndex = span.closedAt + 1;
+    match = arrayStart.exec(text);
+  }
+  return spans;
+}
+
+/**
+ * Scans JSON text from an opening "[" to where the array closes, recording
+ * where its last complete item ends. Brackets inside strings are ignored.
+ */
+function scanArray(text: string, arrayStart: number): Omit<ArraySpan, "start"> {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -164,28 +144,27 @@ function validateFindings(
   return findings;
 }
 
-const CODE_FENCE_PATTERN = /```(?:json)?[^\S\n]*\n?([\s\S]*?)\n?\s*```/g;
-
 /**
- * Finds the findings array in a reply: the whole reply, then each code fence,
- * then each closed array in the text. Prose before or after it and other
- * fences don't matter (#121).
+ * Finds the findings array in a reply: the whole reply if it is one, else the
+ * last closed array holding a valid finding, else the last closed array. The
+ * model puts examples before its answer, and prose around it or code fences
+ * don't matter (#121).
  */
 function extractFindingsArray(text: string): unknown[] | null {
-  return pickFindingsArray(
-    candidateArrayTexts(text.trim()).map(parseJsonArray),
-  );
-}
+  const trimmed = text.trim();
+  const whole = parseJsonArray(trimmed);
+  if (whole !== null) return whole;
 
-function candidateArrayTexts(text: string): string[] {
-  const fenced = [...text.matchAll(CODE_FENCE_PATTERN)].map((match) =>
-    (match[1] ?? "").trim(),
-  );
-  const closedArrays = findingsArrayStarts(text).flatMap((arrayStart) => {
-    const closedAt = scanArray(text, arrayStart).closedAt;
-    return closedAt === null ? [] : [text.slice(arrayStart, closedAt + 1)];
+  const arrays = findTopLevelArrays(trimmed).flatMap(({ start, closedAt }) => {
+    if (closedAt === null) return [];
+    const items = parseJsonArray(trimmed.slice(start, closedAt + 1));
+    return items === null ? [] : [items];
   });
-  return [text, ...fenced, ...closedArrays];
+  return (
+    arrays.findLast((items) => items.some((item) => validateFinding(item))) ??
+    arrays.at(-1) ??
+    null
+  );
 }
 
 function parseJsonArray(text: string): unknown[] | null {
