@@ -8,6 +8,7 @@ const octokitMocks = vi.hoisted(() => ({
   listReviews: vi.fn(),
   getContent: vi.fn(),
   getPullRequest: vi.fn(),
+  createReview: vi.fn(),
 }));
 
 vi.mock("@octokit/rest", () => ({
@@ -20,6 +21,7 @@ vi.mock("@octokit/rest", () => ({
     pulls = {
       listReviews: octokitMocks.listReviews,
       get: octokitMocks.getPullRequest,
+      createReview: octokitMocks.createReview,
     };
     repos = { getContent: octokitMocks.getContent };
     paginate = octokitMocks.paginate;
@@ -315,5 +317,45 @@ describe("fetchPullRequestHeadSha", () => {
       repo: "repo",
       pull_number: 42,
     });
+  });
+});
+
+describe("postPullRequestReview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    octokitMocks.createInstallationAccessToken.mockResolvedValue({
+      data: { token: "installation-token" },
+    });
+    // Few requests left: a rate-limit check here would pause for a minute.
+    octokitMocks.rateLimitGet.mockResolvedValue({
+      data: {
+        resources: {
+          core: { remaining: 1, reset: Math.floor(Date.now() / 1000) + 3600 },
+        },
+      },
+    });
+    octokitMocks.createReview.mockResolvedValue({ data: { id: 99 } });
+  });
+
+  it("posts right away, with no rate-limit pause after the head check (#125)", async () => {
+    const { createGitHubServiceFromEnv } = await loadFreshApiModule();
+
+    const result = await createGitHubServiceFromEnv(1).postPullRequestReview(
+      "owner",
+      "repo",
+      42,
+      {
+        commitSha: "head-sha",
+        body: "Summary",
+        event: "COMMENT",
+        comments: [],
+      },
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: { githubReviewId: 99, postedCommentCount: 0 },
+    });
+    expect(octokitMocks.rateLimitGet).not.toHaveBeenCalled();
   });
 });
